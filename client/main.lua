@@ -1408,6 +1408,8 @@ end)
 -- ── Initialisation ────────────────────────────────────────────────────────
 
 CreateThread(function()
+	Wait(3000)
+
     NUICallbacks.Register()
     -- Tell the NUI page which resource it lives in so fetch() URLs are correct,
     -- and hand it the active locale dictionary so all UI text is translated.
