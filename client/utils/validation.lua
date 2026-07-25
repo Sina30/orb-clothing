@@ -14,6 +14,18 @@ function Validation.ParentIndex(value)
     return Validation.Clamp(value, 0, 45)
 end
 
+-- Mother/father parent index for the freemode head blend. Same valid range as
+-- ParentIndex, but NEVER returns 0: on some clients a head-blend parent index of
+-- 0 intermittently corrupts the ped into the "stretched polygon" glitch. Parent 1
+-- is a near-identical face, so bumping 0 → 1 is cosmetically invisible while
+-- sidestepping the crash. NOTE: only pass the FIRST/SECOND parents (mother/father)
+-- through here — the THIRD parent must keep 0 ("no third parent").
+function Validation.ParentIndexSafe(value)
+    local idx = Validation.Clamp(value, 0, 45)
+    if idx == 0 then idx = 1 end
+    return idx
+end
+
 function Validation.BlendValue(value)
     return Validation.Clamp(value, 0.0, 1.0)
 end

@@ -8,6 +8,7 @@ local isFirstTime    = false
 local creatorPed     = nil
 local originalCoords = nil
 local originalHeading = nil
+local originalModel  = nil   -- ped model at open, so we can swap back on cancel
 local wasSaved       = false
 local pinnedInterior = nil
 
@@ -588,6 +589,7 @@ local function OpenCreator(appearanceData, storeContext)
 
     originalCoords  = GetEntityCoords(playerPed)
     originalHeading = GetEntityHeading(playerPed)
+    originalModel   = GetEntityModel(playerPed)   -- to revert a gender/model swap on cancel
 
     creatorPed = playerPed
 
@@ -699,6 +701,10 @@ local function OpenCreator(appearanceData, storeContext)
     if storeContext then
         msg.allowedTabs = storeContext.allowedTabs
         msg.allowedSubs = storeContext.allowedSubs
+        msg.itemFilter  = storeContext.itemFilter   -- per-section/gender allow-list
+        -- Filter-edit mode: opening the creator to PICK a store's allowed items.
+        msg.filterEdit    = storeContext.filterEdit or nil
+        msg.filterStoreId = storeContext.filterStoreId or nil
         if storeContext.openCamera and not isBarberChair then
             CameraSystem.SetPosition(storeContext.openCamera, creatorPed)
         end
@@ -842,9 +848,19 @@ local function CloseCreator()
         SetPedCanPlayGestureAnims(currentPed, true)
         SetPedConfigFlag(currentPed, 36, false)
 
-        -- If the player cancelled (ESC) without saving, revert all appearance changes
-        if not wasSaved and appearanceSnapshot then
-            RestoreAppearanceSnapshot(currentPed, appearanceSnapshot)
+        -- If the player cancelled (ESC) without saving, revert all appearance changes.
+        if not wasSaved then
+            -- A gender/model swap (e.g. the store item picker previews the female
+            -- model, or the player toggled gender then cancelled) is NOT part of the
+            -- appearance snapshot. Swap the model back FIRST so the snapshot is
+            -- reapplied onto the correct ped — otherwise the player is left swapped.
+            if originalModel and GetEntityModel(currentPed) ~= originalModel then
+                SwapPlayerModel(originalModel, 8000)
+                currentPed = PlayerPedId()
+            end
+            if appearanceSnapshot and DoesEntityExist(currentPed) then
+                RestoreAppearanceSnapshot(currentPed, appearanceSnapshot)
+            end
             DebugPrint('Appearance reverted (cancel/ESC)')
         end
 
@@ -1078,11 +1094,12 @@ AddEventHandler('orb-clothing:client:openForNewCharacter', function(gender)
     local modelName = isMale and Config.PedModels.Male or Config.PedModels.Female
 
     local ped = SwapPlayerModel(GetHashKey(modelName))
-    DataCache.StoreHeritage({ mother = 0, father = 0, shapeValue = 0.5, colorValue = 0.5 })
+    -- Parent index 1 (not 0) — a 0 can corrupt the head blend into stretched polygons.
+    DataCache.StoreHeritage({ mother = 1, father = 1, shapeValue = 0.5, colorValue = 0.5 })
 
     if ped then
         SetPedDefaultComponentVariation(ped)
-        SetPedHeadBlendData(ped, 0, 0, 0, 0, 0, 0, 0.5, 0.5, 0.0, false)
+        SetPedHeadBlendData(ped, 1, 1, 0, 1, 1, 0, 0.5, 0.5, 0.0, false)
 
         local defaultClothing = isMale and Config.DefaultClothing.male or Config.DefaultClothing.female
         for componentId, item in pairs(defaultClothing) do
@@ -1181,6 +1198,29 @@ Bridge.OnPlayerLoaded(function()
     end)
 end)
 
+-- /rs — Refresh skin. Re-applies the player's saved appearance from the database
+-- onto their current ped. Handy when another resource reset their model, an anim
+-- or job script stripped their clothes, or a spawn left them as the wrong ped.
+-- Reuses the exact spawn-apply path (serialized, so it can't race a real spawn).
+RegisterCommand('rs', function()
+    if isCreatorOpen then
+        lib.notify({ title = L('refresh_skin_title'), description = L('refresh_skin_busy'), type = 'inform' })
+        return
+    end
+    lib.callback('orb-clothing:server:loadAppearance', false, function(data)
+        if not data then
+            lib.notify({ title = L('refresh_skin_title'), description = L('refresh_skin_none'), type = 'error' })
+            return
+        end
+        data.selections = data.selections or {}
+        if data.selections['identity_gender'] == nil then
+            data.selections['identity_gender'] = 0
+        end
+        runSpawnApply(data)
+        lib.notify({ title = L('refresh_skin_title'), description = L('refresh_skin_done'), type = 'success' })
+    end)
+end, false)
+
 -- ── Apply saved UI state onto ped ─────────────────────────────────────────
 
 function ApplyAppearanceFromState(ped, data)
@@ -1216,11 +1256,13 @@ function ApplyAppearanceFromState(ped, data)
     end
 
     -- STEP 2: heritage (collect from all sources, apply once)
-    local heritage = { mother = 0, father = 0, shapeValue = 0.5, colorValue = 0.5 }
+    -- mother/father default to 1 (never 0 — a 0 parent index can corrupt the head
+    -- blend into the stretched-polygon glitch).
+    local heritage = { mother = 1, father = 1, shapeValue = 0.5, colorValue = 0.5 }
     for sectionId, index in pairs(selections) do
         local mapping = Config.UIMapping and Config.UIMapping[sectionId]
         if mapping and mapping.type == 'heritage' then
-            heritage[mapping.param] = index
+            heritage[mapping.param] = Validation.ParentIndexSafe(index)
         end
     end
     for sliderId, rawValue in pairs(sliders) do
@@ -1409,8 +1451,11 @@ end)
 
 CreateThread(function()
     NUICallbacks.Register()
-    -- Tell the NUI page which resource it lives in so fetch() URLs are correct,
-    -- and hand it the active locale dictionary so all UI text is translated.
+    -- BACKSTOP init push. The PRIMARY path is the 'uiReady' NUI callback (registered
+    -- above): the page requests this the moment its message listener is up, which
+    -- can't race. This early push is kept only for the case where the page was
+    -- already loaded and listening before we got here; if it's dropped (cold/slow
+    -- load), uiReady delivers the locale anyway. Both apply init idempotently.
     SendNUIMessage({ action = 'init', resourceName = GetCurrentResourceName(), locale = GetLocaleTable() })
 
     -- Load admin stores and merge into Config.StoreLocations BEFORE creating zones/blips

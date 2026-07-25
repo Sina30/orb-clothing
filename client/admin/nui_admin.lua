@@ -37,3 +37,41 @@ RegisterNUICallback('adminUpdateMarkerSize', function(data, cb)
     UpdateMarkerZoneSize(data.width, data.length)
     cb('ok')
 end)
+
+-- ── Store item picker ────────────────────────────────────────────────────
+-- "Restrict items": open the creator in filter-edit mode for a store, so the
+-- owner can tick which drawables it sells (per gender), instead of hunting IDs.
+RegisterNUICallback('adminEditFilter', function(data, cb)
+    cb('ok')
+    local storeId = data and data.id
+    if not storeId then return end
+
+    -- Find the store (merged into Config.StoreLocations by MergeAdminStores).
+    local store
+    for _, s in ipairs(Config.StoreLocations or {}) do
+        if s._adminId == storeId then store = s break end
+    end
+    if not store then return end
+    local storeType = Config.StoreTypes[store.type]
+    if not storeType then return end
+
+    CloseAdminPanel()
+
+    -- Open like /tc (no teleport, no store index) but restricted to this store's
+    -- tabs and in filter-edit mode, seeded with its current allow-list.
+    TriggerEvent('orb-clothing:client:openCreator', {
+        storeType     = store.type,
+        allowedTabs   = storeType.tabs,
+        openCamera    = storeType.openCamera or 'full',
+        itemFilter    = store.itemFilter,
+        filterEdit    = true,
+        filterStoreId = storeId,
+    })
+end)
+
+-- Persist the picked allow-list and close the editing session.
+RegisterNUICallback('saveItemFilter', function(data, cb)
+    cb('ok')
+    TriggerServerEvent('orb-clothing:server:saveItemFilter', data.storeId, data.itemFilter)
+    TriggerEvent('orb-clothing:client:close')   -- cancel-style close: appearance is restored
+end)

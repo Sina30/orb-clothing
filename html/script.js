@@ -28,6 +28,7 @@ const GREENSCREEN_MAP = {
     'clothing_backpacks':    { type: 'clothing', id: 5 },
     'clothing_shoes':        { type: 'clothing', id: 6 },
     'clothing_undershirts':  { type: 'clothing', id: 8 },
+    'clothing_vests':        { type: 'clothing', id: 9 },
     'clothing_tops':         { type: 'clothing', id: 11 },
     'clothing_hats':         { type: 'prop', id: 0 },
     'clothing_glasses':      { type: 'prop', id: 1 },
@@ -62,6 +63,7 @@ const IMAGE_MAPPING = {
     'clothing_glasses':      { prefix: 'glasses_1', gameOffset: -1 },
     'clothing_tops':         { prefix: 'torso_1' },
     'clothing_undershirts':  { prefix: 'tshirt_1' },
+    'clothing_vests':        { prefix: 'bproof_1' },
     'clothing_arms':         { prefix: 'arms' },
     'clothing_pants':        { prefix: 'pants_1' },
     'clothing_backpacks':    { prefix: 'bags_1' },
@@ -100,6 +102,7 @@ const SUBCATEGORY_CAMERA = {
     masks:      'face',
     glasses:    'head',
     tops:       'upper',
+    vests:      'upper',
     backpacks:  'full',
     pants:      'lower',
     shoes:      'feet',
@@ -116,7 +119,20 @@ let isFirstTime = false;
 let allowedTabs = null; // null = all tabs visible; array = only these tab ids visible
 let allowedSubs = null; // null = all subcategories; array = only these subcategory ids
 let currentStoreType = null; // 'clothing', 'barber', 'tattoo', etc. — set on openUI
-let resourceName = 'orb-clothing'; // overwritten by 'init' NUI message
+// Per-store item allow-list. null = no restriction (show every item). Shape:
+//   { [sectionId] = { male: [idx,…], female: [idx,…] } }
+// A section listed here shows ONLY its allowed indices for the current gender; a
+// section NOT listed shows everything. Owner-defined via the store editor's picker.
+let storeItemFilter = null;
+// When true the creator is open in "pick allowed items" mode (store editor), not
+// for a player customizing themselves. Set on openUI from data.filterEdit.
+let filterEditMode = false;
+let filterEditStoreId = null;      // which admin store we're editing the filter for
+let filterEditSelection = null;    // { [sectionId] = { male: Set, female: Set } } being built
+// Real resource name up front (FiveM injects GetParentResourceName), so the very
+// first fetch — the uiReady handshake — reaches the right resource even if the
+// folder was renamed. Still overwritten by the 'init' message as a backstop.
+let resourceName = (typeof GetParentResourceName === 'function') ? GetParentResourceName() : 'orb-clothing';
 
 // ── i18n ─────────────────────────────────────────────────────────────
 // Locale dictionary handed over by Lua (GetLocaleTable) on the 'init'
@@ -321,6 +337,7 @@ const SUBCATEGORIES = {
         { id: 'glasses', name: 'Glasses', icon: 'assets/icon-glasses.svg', count: 40 },
         { id: 'tops', name: 'Tops', icon: 'assets/icon-top.svg', count: 400 },
         { id: 'undershirts', name: 'Undershirts', icon: 'assets/icon-top.svg', count: 200 },
+        { id: 'vests', name: 'Vests', icon: 'assets/icon-body.svg', count: 30 },
         { id: 'arms', name: 'Arms', icon: 'assets/icon-arms.svg', count: 20, hiddenItems: [3,7,9,10,13] },
         { id: 'pants', name: 'Pants', icon: 'assets/icon-pants.svg', count: 150 },
         { id: 'backpacks', name: 'Backpacks', icon: 'assets/icon-backpack.svg', count: 100 },
@@ -824,6 +841,52 @@ function addNoImageContent(item, displayNum) {
     item.appendChild(labelEl);
 }
 
+// ── Per-store item allow-list helpers ──────────────────────────────────────
+// Player-facing: the allowed indices for a section at the CURRENT gender.
+//   - No filter on the store at all → null (sells EVERYTHING, unrestricted).
+//   - Store HAS a filter → strict allow-list: return the listed indices, and a
+//     section with no list returns an EMPTY set → that section shows NOTHING.
+// (So a restricted store only shows what the owner explicitly ticked; untouched
+//  categories are not sold.)
+function getStoreAllowSet(sectionId) {
+    if (!storeItemFilter) return null;
+    const perGender = storeItemFilter[sectionId];
+    const list = perGender && perGender[currentGender];
+    return new Set(Array.isArray(list) ? list : []);
+}
+
+// Build the editable per-gender selection from a stored filter (Sets we can toggle).
+function seedFilterSelection(filter) {
+    const sel = {};
+    if (filter && typeof filter === 'object') {
+        for (const sectionId of Object.keys(filter)) {
+            const g = filter[sectionId] || {};
+            sel[sectionId] = {
+                male:   new Set(Array.isArray(g.male)   ? g.male   : []),
+                female: new Set(Array.isArray(g.female) ? g.female : []),
+            };
+        }
+    }
+    return sel;
+}
+
+// The ticked-Set for a section at the current gender in edit mode (lazily created).
+// Model: ticked = sold. Empty section = sells all (so a fresh store shows everything
+// and the owner ticks the few items a restricted shop should carry).
+function getEditSet(sectionId) {
+    if (!filterEditSelection) return null;
+    let entry = filterEditSelection[sectionId];
+    if (!entry) { entry = { male: new Set(), female: new Set() }; filterEditSelection[sectionId] = entry; }
+    return entry[currentGender];
+}
+
+function toggleFilterItem(sectionId, index) {
+    const set = getEditSet(sectionId);
+    if (!set) return false;
+    if (set.has(index)) { set.delete(index); return false; }
+    set.add(index); return true;
+}
+
 function createItemSection(title, sectionId, itemCount, hiddenItems, cappedGrid) {
     const section = document.createElement('div');
     section.className = 'option-section';
@@ -847,17 +910,32 @@ function createItemSection(title, sectionId, itemCount, hiddenItems, cappedGrid)
     const selectedIndex = state.selections[sectionId] || 0;
     const hiddenSet = hiddenItems ? new Set(hiddenItems) : null;
 
+    // Per-store restriction for THIS section (current gender). In the player-facing
+    // creator, items not in the allow-list are dropped. In filter-edit mode there's
+    // no restriction (the owner needs to see everything to pick).
+    const allowSet = filterEditMode ? null : getStoreAllowSet(sectionId);
+    // In edit mode, which items are currently ticked (a Set of indices) for the gender.
+    const editSet = filterEditMode ? getEditSet(sectionId) : null;
+
     // Extend item range for add-on clothing drawables (Config.CustomClothing.count).
     const effectiveCount = getExtendedCount(sectionId, itemCount);
 
     let displayNum = 0;
     for (let i = 0; i < effectiveCount; i++) {
         if (hiddenSet && hiddenSet.has(i)) continue;
+        if (allowSet && !allowSet.has(i)) continue;   // store sells only allow-listed items
         displayNum++;
         const num = displayNum; // capture for closure
         const item = document.createElement('div');
-        item.className = `item-card ${i === selectedIndex ? 'active' : ''}`;
+        const picked = editSet ? editSet.has(i) : false;
+        item.className = `item-card ${i === selectedIndex ? 'active' : ''}`
+            + (filterEditMode ? ' item-card--pick' : '') + (picked ? ' picked' : '');
         item.dataset.index = i;
+        if (filterEditMode) {
+            const badge = document.createElement('span');
+            badge.className = 'item-pick-badge';
+            item.appendChild(badge);
+        }
 
         // Native browser tooltip for custom-labeled drawables (add-on clothing).
         const customLabel = getCustomLabel(sectionId, i);
@@ -884,7 +962,17 @@ function createItemSection(title, sectionId, itemCount, hiddenItems, cappedGrid)
             addNoImageContent(item, num);
         }
 
-        item.addEventListener('click', () => selectItem(sectionId, i));
+        if (filterEditMode) {
+            // Pick mode: click toggles whether this item is sold here (and previews
+            // it on the ped so the owner sees what they're including).
+            item.addEventListener('click', () => {
+                const on = toggleFilterItem(sectionId, i);
+                item.classList.toggle('picked', on);
+                selectItem(sectionId, i);   // preview on the ped
+            });
+        } else {
+            item.addEventListener('click', () => selectItem(sectionId, i));
+        }
         grid.appendChild(item);
     }
 
@@ -972,6 +1060,54 @@ function jumpToItem(sectionId, displayNum) {
         const target = scroller.scrollTop + (cardRect.top - sRect.top)
             - (scroller.clientHeight / 2) + (cardRect.height / 2);
         smoothScrollTo(scroller, target);
+    }
+}
+
+// ── Per-view scroll memory ──────────────────────────────────────────────────
+// Switching category/subcategory rebuilds optionsPanel, which resets scroll to
+// the top. Remember each view's scroll position so returning to it lands where
+// the player left off; the FIRST time a view is opened, centre the item they're
+// currently wearing instead. Keyed by category + subcategory; cleared per store
+// session (openUI).
+let scrollMemory = {};
+
+function viewKey() {
+    return state.activeCategory + '::' + (state.activeSubcategory || '');
+}
+
+// The element that actually scrolls for the current view (options-panel, or a
+// capped grid). Found via the same walk-up as jumpToItem so it can't drift.
+function getViewScroller() {
+    const card = optionsPanel.querySelector('.item-card');
+    return (card && getScrollParent(card)) || optionsPanel;
+}
+
+function centerCardInScroller(card, scroller) {
+    const cardRect = card.getBoundingClientRect();
+    const sRect = scroller.getBoundingClientRect();
+    const target = scroller.scrollTop + (cardRect.top - sRect.top)
+        - (scroller.clientHeight / 2) + (cardRect.height / 2);
+    scroller.scrollTop = Math.max(0, target);
+}
+
+// Call BEFORE changing the active category/subcategory (old content still up).
+function saveViewScroll() {
+    const sc = getViewScroller();
+    if (sc) scrollMemory[viewKey()] = sc.scrollTop;
+}
+
+// Call AFTER the new view has rendered (inside a rAF so layout has settled).
+function restoreViewScroll() {
+    const sc = getViewScroller();
+    if (!sc) return;
+    const key = viewKey();
+    if (key in scrollMemory) {
+        const max = Math.max(0, sc.scrollHeight - sc.clientHeight);
+        sc.scrollTop = Math.min(scrollMemory[key], max);
+    } else {
+        // First visit to this view: land on the item currently worn/selected.
+        const active = optionsPanel.querySelector('.item-card.active');
+        if (active) centerCardInScroller(active, sc);
     }
 }
 
@@ -1631,11 +1767,15 @@ function updateNumber(controlId, delta, min, max, controlEl) {
 }
 
 function selectCategory(categoryId) {
+    if (categoryId !== state.activeCategory) saveViewScroll();   // remember where we were
     state.activeCategory = categoryId;
     state.activeSubcategory = null;
     updateCategoryTabs();
-    renderContent();
+    renderContent();   // renderSubcategoryTabs auto-selects the first sub synchronously
     updateProgress();
+    // Restore this view's scroll (or centre the worn item on first visit), once
+    // the freshly rendered panel has been laid out.
+    requestAnimationFrame(() => requestAnimationFrame(restoreViewScroll));
     // Move camera to the appropriate position for this category
     const subs = SUBCATEGORIES[categoryId];
     const firstSub = subs && subs.length > 0 ? subs[0].id : null;
@@ -1655,9 +1795,11 @@ function updateCategoryTabs() {
 }
 
 function selectSubcategory(subcategoryId) {
+    if (subcategoryId !== state.activeSubcategory) saveViewScroll();   // remember where we were
     state.activeSubcategory = subcategoryId;
     renderSubcategoryTabs();
     renderOptionsPanel();
+    requestAnimationFrame(() => requestAnimationFrame(restoreViewScroll));
     const camPos = SUBCATEGORY_CAMERA[subcategoryId] || CATEGORY_CAMERA[state.activeCategory] || 'full';
     sendToGame('updateCamera', { position: camPos });
     // For tattoo zones, tell Lua so it can swap the clothing strip and camera focus
@@ -2295,6 +2437,7 @@ function toPlainObject(val) {
 }
 
 function openUI(data) {
+    scrollMemory = {};   // fresh store session → forget previous views' scroll
     if (data) {
         isFirstTime = data.isFirstTime || false;
         state.selections = toPlainObject(data.selections);
@@ -2375,6 +2518,14 @@ function openUI(data) {
             allowedSubs = null;
         }
 
+        // Per-store item allow-list (which drawables this store sells).
+        storeItemFilter = (data.itemFilter && typeof data.itemFilter === 'object') ? data.itemFilter : null;
+
+        // Filter-edit mode: the store owner is choosing which items this store shows.
+        filterEditMode  = data.filterEdit === true;
+        filterEditStoreId = filterEditMode ? (data.filterStoreId || null) : null;
+        filterEditSelection = filterEditMode ? seedFilterSelection(storeItemFilter) : null;
+
         // Update header title + subtitle to match the store type (custom name takes priority)
         applyStoreLabels(data.storeType || 'default', data.storeName || null);
     }
@@ -2391,6 +2542,10 @@ function openUI(data) {
     updateProgress();
     container.classList.remove('hidden');
 
+    // Filter-edit mode: swap the normal Save for the item-picker toolbar.
+    if (filterEditMode) { saveBtn.style.display = 'none'; setupFilterPicker(); }
+    else { saveBtn.style.display = ''; teardownFilterPicker(); }
+
     // Pre-fetch all CDN images in background so browsing feels instant
     preloadCDNImages();
 }
@@ -2401,7 +2556,84 @@ function closeUI() {
     if (confirmPanel) confirmPanel.remove();
     const genericConfirm = document.querySelector('.generic-confirm-panel');
     if (genericConfirm) genericConfirm.remove();
+    teardownFilterPicker();
     sendToGame('closeUI', {});
+}
+
+// ── Store item picker (filter-edit mode) ────────────────────────────────────
+// A toolbar shown while an admin picks which items a store sells. Ticked = sold.
+// Once a store is restricted it becomes a strict allow-list: anything NOT ticked
+// (including whole categories the owner never touched) is hidden from shoppers.
+// A store with no filter saved at all stays fully unrestricted.
+let filterToolbarEl = null;
+
+function collectItemFilter() {
+    const out = {};
+    if (!filterEditSelection) return out;
+    for (const sectionId of Object.keys(filterEditSelection)) {
+        const entry = filterEditSelection[sectionId] || {};
+        const male   = entry.male   ? [...entry.male]   : [];
+        const female = entry.female ? [...entry.female] : [];
+        if (male.length || female.length) {
+            out[sectionId] = {};
+            if (male.length)   out[sectionId].male   = male.sort((a, b) => a - b);
+            if (female.length) out[sectionId].female = female.sort((a, b) => a - b);
+        }
+    }
+    return out;
+}
+
+function updateFilterGenderButtons() {
+    if (!filterToolbarEl) return;
+    filterToolbarEl.querySelectorAll('.filter-g-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.g === currentGender));
+}
+
+function setFilterGender(g) {
+    if (g === currentGender) return;
+    currentGender = g;
+    state.selections['identity_gender'] = (g === 'female') ? 1 : 0;
+    // Reuse the creator's gender swap: Lua swaps the ped model and pushes fresh
+    // add-on counts via 'updateAutoCounts', which re-renders the grid for this gender.
+    sendToGame('selectItem', { section: 'identity_gender', index: (g === 'female') ? 1 : 0 });
+    updateFilterGenderButtons();
+    renderContent();   // immediate re-render; updateAutoCounts refines counts when the swap lands
+}
+
+function setupFilterPicker() {
+    teardownFilterPicker();
+    const bar = document.createElement('div');
+    bar.className = 'filter-toolbar';
+    bar.innerHTML = `
+        <div class="filter-tb-info">
+            <span class="filter-tb-title">${t('filter_editing', 'Choose the items this store sells')}</span>
+            <span class="filter-tb-hint">${t('filter_hint', 'Tick the items this store sells — anything unticked is hidden. Pick for each gender.')}</span>
+        </div>
+        <div class="filter-gender" id="filterGender">
+            <button type="button" data-g="male" class="filter-g-btn">${t('gender_male', 'Male')}</button>
+            <button type="button" data-g="female" class="filter-g-btn">${t('gender_female', 'Female')}</button>
+        </div>
+        <div class="filter-tb-actions">
+            <button type="button" class="filter-tb-btn filter-cancel" id="filterCancel">${t('cancel', 'Cancel')}</button>
+            <button type="button" class="filter-tb-btn filter-save" id="filterSave">${t('filter_save', 'Save items')}</button>
+        </div>`;
+    document.body.appendChild(bar);
+    filterToolbarEl = bar;
+
+    bar.querySelector('#filterGender').addEventListener('click', (e) => {
+        const b = e.target.closest('.filter-g-btn');
+        if (b) setFilterGender(b.dataset.g);
+    });
+    bar.querySelector('#filterCancel').addEventListener('click', () => sendToGame('closeCreator'));
+    bar.querySelector('#filterSave').addEventListener('click', () => {
+        sendToGame('saveItemFilter', { storeId: filterEditStoreId, itemFilter: collectItemFilter() });
+    });
+
+    updateFilterGenderButtons();
+}
+
+function teardownFilterPicker() {
+    if (filterToolbarEl) { filterToolbarEl.remove(); filterToolbarEl = null; }
 }
 
 window.addEventListener('message', (event) => {
@@ -2424,6 +2656,12 @@ window.addEventListener('message', (event) => {
                 const gc = document.querySelector('.generic-confirm-panel');
                 if (gc) gc.remove();
             }
+            // Lua closes the creator (e.g. after Save/Cancel in the item picker) via
+            // this path, so the picker toolbar must be torn down here too — otherwise
+            // it lingers on screen after the UI is hidden.
+            teardownFilterPicker();
+            filterEditMode = false;
+            filterEditSelection = null;
             break;
         case 'closeUI':
             closeUI();
@@ -2486,6 +2724,11 @@ window.addEventListener('message', (event) => {
 document.addEventListener('DOMContentLoaded', () => {
     init();
     adminInit();
+    // The message listener is attached (top-level, above) and the DOM is ready, so
+    // now we can safely receive the locale. Ask Lua for it (handshake) instead of
+    // relying on Lua having pushed it before we existed. Fixes non-English locales
+    // silently not applying on a cold NUI load.
+    sendToGame('uiReady');
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -2514,7 +2757,7 @@ let adminOverlay, adminStoreList, adminEditor;
 let adminTypeGrid, adminCameraGrid;
 let adminWidthEl, adminLengthEl;
 let adminLabelEl, adminJobLockEl, adminBlipToggleEl;
-let adminDeleteBtn, adminSaveBtn;
+let adminDeleteBtn, adminSaveBtn, adminEditFilterBtn;
 let adminConfirmOverlay;
 let zoneXEl, zoneYEl, zoneZEl, zoneWEl;
 let pedXEl, pedYEl, pedZEl, pedWEl;
@@ -2531,6 +2774,12 @@ function adminInit() {
     adminJobLockEl = document.getElementById('adminJobLock');
     adminBlipToggleEl = document.getElementById('adminBlipToggle');
     adminDeleteBtn = document.getElementById('adminDeleteBtn');
+    adminEditFilterBtn = document.getElementById('adminEditFilterBtn');
+    if (adminEditFilterBtn) {
+        adminEditFilterBtn.addEventListener('click', () => {
+            if (adminState.selectedId) sendToGame('adminEditFilter', { id: adminState.selectedId });
+        });
+    }
     adminSaveBtn = document.getElementById('adminSaveBtn');
     adminConfirmOverlay = document.getElementById('adminConfirmOverlay');
     zoneXEl = document.getElementById('zoneX');
@@ -2693,11 +2942,17 @@ function adminInit() {
 // ── Open / close ──
 
 function adminOpenPanel(stores, storeTypes) {
-    adminState.stores = stores || [];
+    // Server stores are oldest→newest; reverse so the newest sits at the top of the list.
+    adminState.stores = (stores || []).slice().reverse();
     adminState.storeTypes = storeTypes || {};
     adminState.selectedId = null;
-    adminResetEditor();
-    adminRenderSidebar();
+    if (adminState.stores.length > 0) {
+        // Auto-select the first (newest) store so the panel opens ready to edit it.
+        adminLoadStore(adminState.stores[0]);   // sets selection + renders the sidebar
+    } else {
+        adminResetEditor();
+        adminRenderSidebar();
+    }
     adminOverlay.classList.remove('hidden');
 }
 
@@ -2713,7 +2968,9 @@ function adminShowPanel() {
 // ── Sync stores after save/delete ──
 
 function adminSyncStores(stores, savedId) {
-    adminState.stores = stores || [];
+    // Keep the same newest-first order as adminOpenPanel so a freshly created store
+    // lands at the top of the list.
+    adminState.stores = (stores || []).slice().reverse();
 
     // A just-saved store (create OR update) should stay selected in the editor so
     // the button reads SAVE STORE and the next save updates it — never duplicates.
@@ -2787,6 +3044,7 @@ function adminResetEditor() {
     adminLabelEl.value = '';
     adminJobLockEl.value = '';
     adminDeleteBtn.classList.add('hidden');
+    if (adminEditFilterBtn) adminEditFilterBtn.classList.add('hidden');
     adminSaveBtn.textContent = t('admin_create_store', 'CREATE STORE');
 }
 
@@ -2834,6 +3092,8 @@ function adminLoadStore(store) {
     adminLabelEl.value = adminState.editor.label;
     adminJobLockEl.value = adminState.editor.jobLock;
     adminDeleteBtn.classList.remove('hidden');
+    // Item picker applies to item-grid stores; tattoo uses a different renderer.
+    if (adminEditFilterBtn) adminEditFilterBtn.classList.toggle('hidden', adminState.editor.type === 'tattoo');
     adminSaveBtn.textContent = t('admin_save_store', 'SAVE STORE');
     adminRenderSidebar();
 }

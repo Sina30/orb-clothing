@@ -32,6 +32,7 @@ function MergeAdminStores(adminStores)
             label       = s.label,
             jobLock     = s.jobLock,
             showBlip    = s.showBlip ~= false,   -- default true; only explicit false hides it
+            itemFilter  = s.itemFilter,          -- per-section/gender allow-list (nil = sells all)
             _adminId    = s.id
         }
     end

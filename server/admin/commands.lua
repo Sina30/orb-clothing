@@ -19,6 +19,7 @@ local function RebuildServerStoreLocations()
             label       = s.label,
             jobLock     = s.jobLock,
             showBlip    = s.showBlip ~= false,   -- default true; only explicit false hides it
+            itemFilter  = s.itemFilter,          -- per-section/gender allow-list (nil = sells all)
             _adminId    = s.id
         }
     end
@@ -117,6 +118,68 @@ RegisterNetEvent('orb-clothing:server:adminDeleteStore', function(data)
             title = L('store_admin_title'), description = L('store_not_found'), type = 'error'
         })
     end
+end)
+
+-- ── Net event: save a store's item allow-list ───────────────────────────
+-- Client-sent shape: { [sectionId] = { male = {int…}, female = {int…} } }. NEVER
+-- trusted: sanitised into plain int arrays with hard caps before it's stored.
+local function sanitizeItemFilter(raw)
+    if type(raw) ~= 'table' then return nil end
+    local out = {}
+    local sectionCount = 0
+    for sectionId, perGender in pairs(raw) do
+        if type(sectionId) == 'string' and #sectionId <= 64 and type(perGender) == 'table'
+            and sectionCount < 64 then
+            local entry = {}
+            for _, gender in ipairs({ 'male', 'female' }) do
+                local list = perGender[gender]
+                if type(list) == 'table' then
+                    local ids, seen = {}, {}
+                    for _, v in ipairs(list) do
+                        local n = tonumber(v)
+                        if n then
+                            n = math.floor(n)
+                            if n >= 0 and n < 10000 and not seen[n] then
+                                seen[n] = true
+                                ids[#ids + 1] = n
+                            end
+                        end
+                        if #ids >= 5000 then break end
+                    end
+                    if #ids > 0 then entry[gender] = ids end
+                end
+            end
+            if next(entry) then
+                out[sectionId] = entry
+                sectionCount = sectionCount + 1
+            end
+        end
+    end
+    if next(out) then return out end
+    return nil   -- empty → nil so the store goes back to selling everything
+end
+
+RegisterNetEvent('orb-clothing:server:saveItemFilter', function(storeId, itemFilter)
+    local src = source
+    if not AdminStorage.IsAdmin(src) then
+        lib.print.warn(('[AdminCommands] Non-admin %s attempted saveItemFilter'):format(tostring(src)))
+        return
+    end
+    if type(storeId) ~= 'string' then return end
+
+    local store = AdminStorage.FindById(storeId)
+    if not store then
+        TriggerClientEvent('orb-clothing:client:adminNotify', src, {
+            title = L('store_admin_title'), description = L('store_not_found'), type = 'error' })
+        return
+    end
+
+    store.itemFilter = sanitizeItemFilter(itemFilter)   -- nil clears the restriction
+    AdminStorage.Update(storeId, store)
+    RebuildServerStoreLocations()
+    TriggerClientEvent('orb-clothing:client:reloadStores', -1, AdminStorage.GetAll())
+    TriggerClientEvent('orb-clothing:client:adminNotify', src, {
+        title = L('store_admin_title'), description = L('filter_saved'), type = 'success' })
 end)
 
 -- ── /skin [id] — admin: open the FULL creator on a player ────────────────

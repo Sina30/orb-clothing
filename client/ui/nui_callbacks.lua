@@ -13,6 +13,17 @@ function SceneEffects.DisableLight()
 end
 
 function NUICallbacks.Register()
+    -- Handshake: the NUI page calls this once its message listener is attached
+    -- (on DOMContentLoaded). ONLY THEN is it safe to hand it the locale + resource
+    -- name. The old code pushed 'init' on resource start, before the CEF page had
+    -- finished loading, so on a cold/slow load the message was dropped and the UI
+    -- fell back to English — which is why adding other languages "didn't work"
+    -- (and why a fixed Wait(3000) papered over it). Pull-on-ready has no race.
+    RegisterNUICallback('uiReady', function(_, cb)
+        SendNUIMessage({ action = 'init', resourceName = GetCurrentResourceName(), locale = GetLocaleTable() })
+        cb('ok')
+    end)
+
     RegisterNUICallback('closeCreator', function(data, cb)
         TriggerEvent('orb-clothing:client:close')
         cb('ok')
@@ -274,12 +285,16 @@ function NUICallbacks.Register()
                 local newPed = SwapPlayerModel(modelHash, 8000)
                 if newPed then
                     local heritage = DataCache.GetHeritage() or {
-                        mother = 0,
-                        father = 0,
+                        mother = 1,
+                        father = 1,
                         shapeValue = 0.5,
                         colorValue = 0.5
                     }
-                    SetPedHeadBlendData(newPed, heritage.mother, heritage.father, 0, heritage.mother, heritage.father, 0, heritage.shapeValue, heritage.colorValue, 0.0, false)
+                    -- Never blend with parent index 0 — it can corrupt the freshly
+                    -- swapped ped into the stretched-polygon glitch.
+                    local hMother = Validation.ParentIndexSafe(heritage.mother or 1)
+                    local hFather = Validation.ParentIndexSafe(heritage.father or 1)
+                    SetPedHeadBlendData(newPed, hMother, hFather, 0, hMother, hFather, 0, heritage.shapeValue, heritage.colorValue, 0.0, false)
                     SetPedDefaultComponentVariation(newPed)
 
                     -- Re-query auto-counts for the new gender: add-on packs
@@ -297,12 +312,13 @@ function NUICallbacks.Register()
 
         elseif mapping.type == "heritage" then
             local currentHeritage = DataCache.GetHeritage() or {
-                mother = 0,
-                father = 0,
+                mother = 1,
+                father = 1,
                 shapeValue = 0.5,
                 colorValue = 0.5
             }
-            currentHeritage[mapping.param] = index
+            -- Keep a safe minimum of 1 so a picked parent 0 can't corrupt the blend.
+            currentHeritage[mapping.param] = Validation.ParentIndexSafe(index)
             DataCache.StoreHeritage(currentHeritage)
             AppearanceSystem.UpdateHeritage(ped, currentHeritage)
 
@@ -352,11 +368,13 @@ function NUICallbacks.Register()
 
         if mapping.type == "heritage" then
             local currentHeritage = DataCache.GetHeritage() or {
-                mother = 0,
-                father = 0,
+                mother = 1,
+                father = 1,
                 shapeValue = 0.5,
                 colorValue = 0.5
             }
+            -- Sliders drive the blend MIX (0-1), not a parent index — store as-is;
+            -- UpdateHeritage coerces mother/father away from 0 on apply.
             currentHeritage[mapping.param] = value
             DataCache.StoreHeritage(currentHeritage)
             AppearanceSystem.UpdateHeritage(ped, currentHeritage)

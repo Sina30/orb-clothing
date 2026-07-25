@@ -161,6 +161,7 @@ AddEventHandler('orb-clothing:client:openStore', function(storeIndex)
         allowedTabs = storeType.tabs,
         openCamera  = storeType.openCamera or 'full',
         chair       = selectedChair,
+        itemFilter  = store.itemFilter,   -- per-section/gender allow-list (nil = sells all)
     }
 
     TriggerEvent('orb-clothing:client:openCreator', storeContext)

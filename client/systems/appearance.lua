@@ -9,8 +9,10 @@ function AppearanceSystem.UpdateHeritage(ped, data)
         return false
     end
 
-    local mother = Validation.ParentIndex(data.mother or 0)
-    local father = Validation.ParentIndex(data.father or 0)
+    -- mother/father must never be 0 (head-blend corruption glitch); third parent
+    -- keeps its full range including 0 = "no third parent".
+    local mother = Validation.ParentIndexSafe(data.mother or 0)
+    local father = Validation.ParentIndexSafe(data.father or 0)
     local thirdParent = Validation.ParentIndex(data.thirdParent or 0)
     local shapeValue = Validation.BlendValue(data.shapeValue or 0.5)
     local colorValue = Validation.BlendValue(data.colorValue or 0.5)
