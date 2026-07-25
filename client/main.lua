@@ -1450,6 +1450,8 @@ end)
 -- ── Initialisation ────────────────────────────────────────────────────────
 
 CreateThread(function()
+	Wait(3000)
+
     NUICallbacks.Register()
     -- BACKSTOP init push. The PRIMARY path is the 'uiReady' NUI callback (registered
     -- above): the page requests this the moment its message listener is up, which
