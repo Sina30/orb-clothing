@@ -144,7 +144,10 @@ function AppearanceSystem.UpdateEyeColor(ped, colorId)
 end
 
 function AppearanceSystem.ApplyFullAppearance(ped, data)
-    if not DoesEntityExist(ped) then
+    -- Guard `data` too: callers pass appearanceData.appearance which can be nil
+    -- (e.g. a store opens with only selections/sliders). Indexing data.heritage on
+    -- nil would hard-crash the apply. Self-protecting like illenium's setPedAppearance.
+    if not DoesEntityExist(ped) or not data then
         return false
     end
 

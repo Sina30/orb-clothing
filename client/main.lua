@@ -365,6 +365,10 @@ function CreateBarberCamera(ped, preset)
     SetCamActive(newCam, true)
     RenderScriptCams(true, false, 0, true, true)
 
+    -- Anchor streaming/culling to the camera so the interior renders (see the
+    -- camera-focus note in OpenCreator). Cleared via ClearFocus() in CloseCreator.
+    SetFocusPosAndVel(worldPos.x, worldPos.y, camZ, 0.0, 0.0, 0.0)
+
     -- Store in CameraSystem so Destroy/transitions still work
     if CameraSystem.activeCamera and DoesCamExist(CameraSystem.activeCamera) then
         DestroyCam(CameraSystem.activeCamera, false)
@@ -622,13 +626,14 @@ local function OpenCreator(appearanceData, storeContext)
     end
     CameraSystem.ClearAnchor()
 
-    -- Anchor world/interior streaming to the PED, not the camera. With a scripted
-    -- cam active the engine streams around the camera by default — so when a preset
-    -- placed the cam behind a wall, the game decided "you're outside the interior"
-    -- and unloaded it, dropping the ped into the void. Focusing the ped keeps the
-    -- interior loaded no matter where the camera ends up. Follows the ped, so it
-    -- also covers the barber sitting down. Cleared in CloseCreator.
-    SetFocusEntity(creatorPed)
+    -- NOTE: streaming/interior focus is now owned by the camera system, which pins
+    -- the focus to the CAMERA position (SetFocusPosAndVel) every time the camera
+    -- moves. We used to SetFocusEntity(creatorPed) here to stop the interior
+    -- unloading when the cam sat behind a wall — but focusing the PED left the
+    -- interior CULLED from the camera's viewpoint until the camera moved (the
+    -- "interior disappears until I pan" bug). The cam is kept inside the interior
+    -- by ClampToCollision/KeepInInterior, so camera-focus is safe. Cleared in
+    -- CloseCreator via ClearFocus().
 
     -- Skip initial camera for barber chairs — CreateBarberCamera handles it after sitting
     if not isBarberChair then
@@ -649,7 +654,12 @@ local function OpenCreator(appearanceData, storeContext)
         TaskStandStill(creatorPed, -1)
     end
 
-    if appearanceData then
+    -- Only RE-APPLY a full appearance payload (identity/skin/hair/clothing). When
+    -- opening from a store we hand in the player's saved DB row purely to seed the
+    -- NUI selections/sliders/numbers — that row has no '.appearance' sub-table, so
+    -- we must NOT feed nil into ApplyFullAppearance (it would crash / blank the ped;
+    -- the ped already wears the correct look on store entry anyway).
+    if appearanceData and appearanceData.appearance then
         AppearanceSystem.ApplyFullAppearance(creatorPed, appearanceData.appearance)
         HairSystem.ApplyFullHair(creatorPed, appearanceData.hair)
         ClothingSystem.ApplyFullClothing(creatorPed, appearanceData.clothing, appearanceData.props)
@@ -671,6 +681,14 @@ local function OpenCreator(appearanceData, storeContext)
         sliders     = appearanceData and appearanceData.sliders    or {},
         numbers     = appearanceData and appearanceData.numbers    or {},
     }
+
+    -- Ground identity_gender in the LIVE ped model (illenium-style ground truth)
+    -- whenever the loaded data didn't carry it — covers /skin and first-time, which
+    -- open without preloaded selections. The NUI syncs currentGender from this, so
+    -- a save can never flip a female to the 'male' UI default.
+    if msg.selections['identity_gender'] == nil then
+        msg.selections['identity_gender'] = Config.IsMale(creatorPed) and 0 or 1
+    end
 
     -- Send pricing data to NUI when opening a store (not /tc creator)
     if storeContext and Config.Pricing and Config.Pricing.enabled then
@@ -939,6 +957,13 @@ local function CloseCreator()
     isClosing          = false
     wasSaved           = false
     isSeatedInChair    = false
+    -- Clear the origin snapshot so it can't teleport the ped later: onResourceStop
+    -- restores to originalCoords whenever it's set, so a stale value from a normal
+    -- store visit would yank the player back to that store on the next resource
+    -- restart (or confuse a subsequent /rs).
+    originalCoords     = nil
+    originalHeading    = nil
+    originalModel      = nil
 
     -- Hold black a moment so the restored world finishes streaming, then reveal it.
     Wait(FADE_SETTLE_MS)
@@ -951,7 +976,16 @@ end
 
 -- Fired by interaction.lua when player enters a store and presses E
 AddEventHandler('orb-clothing:client:openCreator', function(storeContext)
-    OpenCreator(nil, storeContext)
+    -- Load the player's saved appearance BEFORE opening so the NUI carries their
+    -- real selections/sliders/numbers (heritage, skin tone, face, body). A clothing
+    -- store hides the identity tab, so if the NUI opened with empty state a save
+    -- would ship the module defaults and the server would overwrite the player's
+    -- real face — the "using a store reset my skin/heritage" bug. OpenCreator only
+    -- re-applies a look when the data has the full '.appearance' format (it doesn't
+    -- here), so the ped is left exactly as it entered.
+    lib.callback('orb-clothing:server:loadAppearance', false, function(savedData)
+        OpenCreator(savedData, storeContext)
+    end)
 end)
 
 -- Admin /skin: the SERVER validates the caller and targets us, then fires this.
@@ -1175,7 +1209,14 @@ local function runSpawnApply(data)
     end
 end
 
+-- Grace period so other spawn scripts (multichar, framework skin appliers) finish
+-- BEFORE we apply — our appearance must land last to win. Without it a late
+-- external apply clobbers ours and the player surfaces in an old outfit.
+local SPAWN_APPLY_DELAY_MS = 500
+
 Bridge.OnPlayerLoaded(function()
+    Wait(SPAWN_APPLY_DELAY_MS)
+
     lib.callback('orb-clothing:server:loadAppearance', false, function(data)
         if not data then
             DebugPrint('loadAppearance returned NO DATA (spawn will keep current ped)')
@@ -1183,14 +1224,13 @@ Bridge.OnPlayerLoaded(function()
         end
 
         -- Guarantee a gender so the freemode model is ALWAYS applied on spawn.
-        -- Older saves (and any created before the gender was persisted) can lack
-        -- identity_gender; without it STEP 1 was skipped and the player kept the
-        -- random/previous ped. Default to male — this matches what the server
-        -- mirrors into playerskins (and thus the character-select preview), so it
-        -- stays consistent. Re-saving the character persists the real gender.
+        -- Older/migrated saves can lack identity_gender; without it STEP 1 was
+        -- skipped and the player kept the random/previous ped. Default it from the
+        -- CURRENT ped model (NOT a hard male default) so a female character isn't
+        -- flipped to male on every spawn. Re-saving persists the real gender.
         data.selections = data.selections or {}
         if data.selections['identity_gender'] == nil then
-            data.selections['identity_gender'] = 0
+            data.selections['identity_gender'] = Config.IsMale(PlayerPedId()) and 0 or 1
         end
 
         runSpawnApply(data)
@@ -1212,9 +1252,11 @@ RegisterCommand('rs', function()
             lib.notify({ title = L('refresh_skin_title'), description = L('refresh_skin_none'), type = 'error' })
             return
         end
+        -- Default a missing gender from the CURRENT ped model, never a hard male
+        -- default — otherwise /rs on a female ped swaps her to male.
         data.selections = data.selections or {}
         if data.selections['identity_gender'] == nil then
-            data.selections['identity_gender'] = 0
+            data.selections['identity_gender'] = Config.IsMale(PlayerPedId()) and 0 or 1
         end
         runSpawnApply(data)
         lib.notify({ title = L('refresh_skin_title'), description = L('refresh_skin_done'), type = 'success' })
@@ -1227,6 +1269,12 @@ function ApplyAppearanceFromState(ped, data)
     local selections = data.selections or {}
     local sliders    = data.sliders    or {}
     local numbers    = data.numbers    or {}
+
+    -- Snapshot position BEFORE the model swap. SwapPlayerModel recreates the ped
+    -- entity and on some clients SetPlayerModel drops it at a cached spawn point —
+    -- that's the "/rs teleports me" bug. We put the new ped back where it was.
+    local preSwapCoords  = GetEntityCoords(ped)
+    local preSwapHeading = GetEntityHeading(ped)
 
     -- STEP 1: player model
     local modelSelection = selections['identity_gender']
@@ -1247,6 +1295,10 @@ function ApplyAppearanceFromState(ped, data)
                     if newPed then
                         ped = newPed
                         SetPedDefaultComponentVariation(ped)
+                        -- Put the freshly swapped ped back where it was so the model
+                        -- swap can't teleport the player (see preSwapCoords above).
+                        SetEntityCoordsNoOffset(ped, preSwapCoords.x, preSwapCoords.y, preSwapCoords.z, false, false, false)
+                        SetEntityHeading(ped, preSwapHeading)
                     end
                     -- If the model never streamed we keep the current ped: the
                     -- loaded-event fires again on the next spawn and retries.
@@ -1450,8 +1502,6 @@ end)
 -- ── Initialisation ────────────────────────────────────────────────────────
 
 CreateThread(function()
-	Wait(3000)
-
     NUICallbacks.Register()
     -- BACKSTOP init push. The PRIMARY path is the 'uiReady' NUI callback (registered
     -- above): the page requests this the moment its message listener is up, which

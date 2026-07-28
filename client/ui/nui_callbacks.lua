@@ -233,6 +233,16 @@ function NUICallbacks.Register()
         cb('ok')
     end)
 
+    -- Right-click drag → slide the camera left/right (+1 right, -1 left). Lets
+    -- low-res users move the ped out from under the left options panel.
+    RegisterNUICallback('panCameraHorizontal', function(data, cb)
+        local delta = tonumber(data.delta) or 0
+        if delta ~= 0 and CameraSystem and CameraSystem.AdjustHorizontalPan then
+            CameraSystem.AdjustHorizontalPan(delta)
+        end
+        cb('ok')
+    end)
+
     RegisterNUICallback('requestAppearanceData', function(data, cb)
         local ped = PlayerPedId()
         local appearanceData = AppearanceSystem.GetCurrentAppearance(ped)
@@ -277,6 +287,9 @@ function NUICallbacks.Register()
             local model = mapping.values[index + 1]
             if model then
                 local modelHash = GetHashKey(model)
+                -- Snapshot placement so the model swap can't drift the ped out of
+                -- frame (SwapPlayerModel recreates the entity, unfrozen).
+                local swapCoords = GetEntityCoords(PlayerPedId())
                 -- Hardened swap (see SwapPlayerModel in main.lua). The old code
                 -- here gave the other gender's model ONE second, then blended on
                 -- a possibly-dying ped handle the same frame — clicking the
@@ -296,6 +309,13 @@ function NUICallbacks.Register()
                     local hFather = Validation.ParentIndexSafe(heritage.father or 1)
                     SetPedHeadBlendData(newPed, hMother, hFather, 0, hMother, hFather, 0, heritage.shapeValue, heritage.colorValue, 0.0, false)
                     SetPedDefaultComponentVariation(newPed)
+
+                    -- Re-place, re-face and re-freeze the fresh ped so the gender
+                    -- swap can't drift it or leave it unfrozen (mirrors selectCustomPed).
+                    SetEntityCoordsNoOffset(newPed, swapCoords.x, swapCoords.y, swapCoords.z, false, false, false)
+                    SetEntityHeading(newPed, CameraSystem.lockedHeading or GetEntityHeading(newPed))
+                    FreezeEntityPosition(newPed, true)
+                    TaskStandStill(newPed, -1)
 
                     -- Re-query auto-counts for the new gender: add-on packs
                     -- often have different drawable ranges per model, so we

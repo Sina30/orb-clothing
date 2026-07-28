@@ -104,6 +104,7 @@ local L_es = {
     ['sub_tops'] = "Torso",
     ['sub_undershirts'] = "Camisetas",
     ['sub_vests'] = "Chalecos",
+    ['sub_decals'] = "Emblemas",
     ['sub_arms'] = "Brazos",
     ['sub_pants'] = "Pantalones",
     ['sub_backpacks'] = "Mochilas",
@@ -169,6 +170,7 @@ local L_es = {
 
     -- ── Scene hints (static UI) ──────────────────────────────────────
     ['hint_rotate'] = "ARRASTRA PARA ROTAR Y MOVER",
+    ['hint_pan_h'] = "CLICK DERECHO PARA MOVER IZQ/DER",
     ['hint_zoom'] = "RUEDA PARA HACER ZOOM",
 
     -- ── Admin panel (static UI) ──────────────────────────────────────
@@ -274,6 +276,10 @@ local L_es = {
     ['skin_opened_self'] = "Abriendo la personalización de tu personaje...",
     ['skin_opened_target'] = "Abriste la personalización del personaje de %s.",
     ['skin_already_open'] = "El menú de personalización ya está abierto.",
+    ['checkskin_no_id'] = "No se encontró identificador para el jugador %s.",
+    ['checkskin_no_data'] = "No hay apariencia guardada para %s.",
+    ['checkskin_bad_json'] = "No se pudo decodificar la apariencia guardada de %s.",
+    ['checkskin_summary'] = "%s (%s) — género: %s | selecciones: %d, sliders: %d, números: %d, ropa: %d, props: %d, tatuajes: %d",
 }
 
 -- Make accessible globally

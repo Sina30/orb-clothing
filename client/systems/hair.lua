@@ -40,7 +40,9 @@ function HairSystem.UpdateHairColor(ped, primaryColor, highlightColor)
 end
 
 function HairSystem.ApplyFullHair(ped, data)
-    if not DoesEntityExist(ped) then
+    -- Guard `data` too: OpenCreator passes appearanceData.hair unconditionally and
+    -- it can be nil (store opens without a full appearance). Below indexes data.style.
+    if not DoesEntityExist(ped) or not data then
         return false
     end
 

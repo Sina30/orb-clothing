@@ -121,8 +121,18 @@ RegisterNetEvent('orb-clothing:server:saveAppearance', function(data)
     end
 
     -- Deep-merge each sub-table: incoming keys overwrite, existing keys are kept
+    local mergedSelections = shallowMerge(existing.selections or {}, incoming.selections)
+
+    -- Authoritative gender guard: a STORE save (data.storeIndex set) opens without
+    -- the identity/gender tab, so it must NEVER change identity_gender. If the NUI
+    -- ships a stale/default gender (the female-flip bug), keep the saved one. This
+    -- stops the corruption at the source regardless of any client-side issue.
+    if data.storeIndex and existing.selections and existing.selections['identity_gender'] ~= nil then
+        mergedSelections['identity_gender'] = existing.selections['identity_gender']
+    end
+
     local merged = {
-        selections = shallowMerge(existing.selections or {}, incoming.selections),
+        selections = mergedSelections,
         sliders    = shallowMerge(existing.sliders    or {}, incoming.sliders),
         numbers    = shallowMerge(existing.numbers    or {}, incoming.numbers),
         tattoos    = incoming.tattoos or existing.tattoos or {},

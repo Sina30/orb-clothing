@@ -104,6 +104,7 @@ local L_en = {
     ['sub_tops'] = "Tops",
     ['sub_undershirts'] = "Undershirts",
     ['sub_vests'] = "Vests",
+    ['sub_decals'] = "Decals",
     ['sub_arms'] = "Arms",
     ['sub_pants'] = "Pants",
     ['sub_backpacks'] = "Backpacks",
@@ -169,6 +170,7 @@ local L_en = {
 
     -- ── Scene hints (static UI) ──────────────────────────────────────
     ['hint_rotate'] = "DRAG TO ROTATE & PAN",
+    ['hint_pan_h'] = "RIGHT-CLICK DRAG TO PAN LEFT/RIGHT",
     ['hint_zoom'] = "SCROLL TO ZOOM",
 
     -- ── Admin panel (static UI) ──────────────────────────────────────
@@ -274,6 +276,10 @@ local L_en = {
     ['skin_opened_self'] = "Opening your character customization...",
     ['skin_opened_target'] = "Opened character customization for %s.",
     ['skin_already_open'] = "The customization menu is already open.",
+    ['checkskin_no_id'] = "No identifier found for player %s.",
+    ['checkskin_no_data'] = "No saved appearance for %s.",
+    ['checkskin_bad_json'] = "Failed to decode saved appearance for %s.",
+    ['checkskin_summary'] = "%s (%s) — gender: %s | selections: %d, sliders: %d, numbers: %d, clothing: %d, props: %d, tattoos: %d",
 }
 
 -- Make accessible globally

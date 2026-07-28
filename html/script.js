@@ -29,6 +29,7 @@ const GREENSCREEN_MAP = {
     'clothing_shoes':        { type: 'clothing', id: 6 },
     'clothing_undershirts':  { type: 'clothing', id: 8 },
     'clothing_vests':        { type: 'clothing', id: 9 },
+    'clothing_decals':       { type: 'clothing', id: 10 },
     'clothing_tops':         { type: 'clothing', id: 11 },
     'clothing_hats':         { type: 'prop', id: 0 },
     'clothing_glasses':      { type: 'prop', id: 1 },
@@ -103,6 +104,7 @@ const SUBCATEGORY_CAMERA = {
     glasses:    'head',
     tops:       'upper',
     vests:      'upper',
+    decals:     'upper',
     backpacks:  'full',
     pants:      'lower',
     shoes:      'feet',
@@ -338,6 +340,7 @@ const SUBCATEGORIES = {
         { id: 'tops', name: 'Tops', icon: 'assets/icon-top.svg', count: 400 },
         { id: 'undershirts', name: 'Undershirts', icon: 'assets/icon-top.svg', count: 200 },
         { id: 'vests', name: 'Vests', icon: 'assets/icon-body.svg', count: 30 },
+        { id: 'decals', name: 'Decals', icon: 'assets/icon-body.svg', count: 20 },
         { id: 'arms', name: 'Arms', icon: 'assets/icon-arms.svg', count: 20, hiddenItems: [3,7,9,10,13] },
         { id: 'pants', name: 'Pants', icon: 'assets/icon-pants.svg', count: 150 },
         { id: 'backpacks', name: 'Backpacks', icon: 'assets/icon-backpack.svg', count: 100 },
@@ -621,7 +624,11 @@ function initializeDefaults() {
             if (content.sections) {
                 content.sections.forEach((section, idx) => {
                     state.expanded[`${cat.id}_${section.id}`] = true;
-                    state.selections[`${cat.id}_${section.id}`] = 0;
+                    // Only seed a default if nothing was loaded — never clobber a
+                    // value that came from the player's saved appearance.
+                    if (state.selections[`${cat.id}_${section.id}`] === undefined) {
+                        state.selections[`${cat.id}_${section.id}`] = 0;
+                    }
                 });
             }
             if (content.subcategoryContent) {
@@ -629,29 +636,39 @@ function initializeDefaults() {
                     if (subContent.sections) {
                         subContent.sections.forEach(section => {
                             state.expanded[`${cat.id}_${section.id}`] = true;
-                            state.selections[`${cat.id}_${section.id}`] = 0;
+                            if (state.selections[`${cat.id}_${section.id}`] === undefined) {
+                                state.selections[`${cat.id}_${section.id}`] = 0;
+                            }
                         });
                     }
                     if (subContent.sliders) {
                         subContent.sliders.forEach(slider => {
-                            state.sliders[slider.id] = 50;
+                            if (state.sliders[slider.id] === undefined) {
+                                state.sliders[slider.id] = 50;
+                            }
                         });
                     }
                     if (subContent.controls) {
                         subContent.controls.forEach(control => {
-                            state.numbers[control.id] = control.min || 0;
+                            if (state.numbers[control.id] === undefined) {
+                                state.numbers[control.id] = control.min || 0;
+                            }
                         });
                     }
                 });
             }
             if (content.sliders) {
                 content.sliders.forEach(slider => {
-                    state.sliders[slider.id] = 50;
+                    if (state.sliders[slider.id] === undefined) {
+                        state.sliders[slider.id] = 50;
+                    }
                 });
             }
             if (content.controls) {
                 content.controls.forEach(control => {
-                    state.numbers[control.id] = control.min || 0;
+                    if (state.numbers[control.id] === undefined) {
+                        state.numbers[control.id] = control.min || 0;
+                    }
                 });
             }
         }
@@ -1299,6 +1316,22 @@ const GTA_HAIR_COLORS = [
     '#291f19','#2e221b','#37291e','#2e2218','#231b15','#020202','#706c66','#9d7a50'
 ];
 
+// GTA V makeup palette (indices 0–63, colorType 2). Lipstick/blush use this, NOT
+// the hair palette — otherwise the swatches don't match what the game applies.
+const GTA_MAKEUP_COLORS = [
+    '#e0d7b8','#b8a98a','#c9b88c','#d4a87a','#c99c6e','#b8845c','#a86c4a','#986040',
+    '#8a5438','#7c4830','#6e3c28','#603020','#522418','#441810','#360c08','#280000',
+    '#f0c8c8','#e8b0b0','#e09898','#d88080','#d06868','#c85050','#c03838','#b82020',
+    '#b00808','#a80000','#980000','#880000','#780000','#680000','#580000','#480000',
+    '#f8d0e0','#f0b8d0','#e8a0c0','#e088b0','#d870a0','#d05890','#c84080','#c02870',
+    '#b81060','#b00050','#a00048','#900040','#800038','#700030','#600028','#500020',
+    '#e8c0f0','#d8a0e0','#c880d0','#b860c0','#a840b0','#9820a0','#880090','#780080',
+    '#680070','#580060','#480050','#380040','#280030','#180020','#080010','#000000'
+];
+
+// Controls whose color index maps into the makeup palette instead of the hair one.
+const MAKEUP_COLOR_IDS = ['lipstickColor', 'blushColor'];
+
 function createColorPicker(control) {
     const wrapper = document.createElement('div');
     wrapper.className = 'color-picker-control';
@@ -1313,10 +1346,13 @@ function createColorPicker(control) {
 
     const current = state.numbers[control.id] !== undefined ? state.numbers[control.id] : control.min;
 
+    // Lipstick/blush read from the makeup palette; hair/beard/eyebrows from hair.
+    const palette = MAKEUP_COLOR_IDS.includes(control.id) ? GTA_MAKEUP_COLORS : GTA_HAIR_COLORS;
+
     for (let i = control.min; i <= control.max; i++) {
         const swatch = document.createElement('button');
         swatch.className = 'color-swatch' + (i === current ? ' active' : '');
-        swatch.style.background = GTA_HAIR_COLORS[i] || '#888';
+        swatch.style.background = palette[i] || '#888';
         swatch.title = i;
         swatch.dataset.index = i;
         swatch.addEventListener('click', () => {
@@ -2027,14 +2063,17 @@ function bindEvents() {
     });
 
     // Drag-to-rotate + drag-to-pan on the right-side drag zone.
-    // Horizontal delta → ped rotation (rotatePed, unchanged behavior).
-    // Vertical delta   → camera vertical pan (panCamera, new).
+    //   Left-click horizontal  → ped rotation (rotatePed)
+    //   Left/right vertical     → camera vertical pan (panCamera)
+    //   Right-click horizontal  → camera horizontal pan (panCameraHorizontal) —
+    //     lets low-res users slide the ped out from under the left panel.
     const dragZone = document.getElementById('dragZone');
     let dragStartX = null;
     let dragStartY = null;
     let lastDragX = null;
     let lastDragY = null;
-    let dragAxis = null; // 'x' (rotate) or 'y' (pan) — locked per drag
+    let dragAxis = null; // 'x' (rotate/h-pan) or 'y' (v-pan) — locked per drag
+    let isRightClick = false; // right-click drag = horizontal camera pan
     const DRAG_THRESHOLD = 8;     // px per rotation / pan step
     const AXIS_LOCK_THRESHOLD = 6; // px of movement before locking the axis
 
@@ -2046,9 +2085,13 @@ function bindEvents() {
         dragStartY = e.clientY;
         lastDragX = e.clientX;
         lastDragY = e.clientY;
+        isRightClick = (e.button === 2); // right mouse button
         dragZone.classList.add('dragging');
         e.preventDefault();
     });
+
+    // Swallow the context menu so a right-click drag doesn't pop CEF's menu.
+    dragZone.addEventListener('contextmenu', (e) => e.preventDefault());
 
     document.addEventListener('mousemove', (e) => {
         if (dragStartX === null) return;
@@ -2063,10 +2106,17 @@ function bindEvents() {
         }
 
         if (dragAxis === 'x') {
-            // Horizontal: rotate the ped in place
             const deltaX = e.clientX - lastDragX;
             if (Math.abs(deltaX) >= DRAG_THRESHOLD) {
-                sendToGame('rotatePed', { direction: deltaX > 0 ? 1 : -1 });
+                if (isRightClick) {
+                    // Right-click horizontal: slide the ped sideways in frame —
+                    // drag RIGHT → the ped moves right (out from under the left
+                    // panel), the whole point of this on low-res screens.
+                    sendToGame('panCameraHorizontal', { delta: deltaX > 0 ? 1 : -1 });
+                } else {
+                    // Left-click horizontal: rotate the ped in place.
+                    sendToGame('rotatePed', { direction: deltaX > 0 ? 1 : -1 });
+                }
                 lastDragX = e.clientX;
             }
         } else {
@@ -2088,6 +2138,7 @@ function bindEvents() {
         lastDragX = null;
         lastDragY = null;
         dragAxis = null;
+        isRightClick = false;
         dragZone.classList.remove('dragging');
     });
 
@@ -2444,6 +2495,13 @@ function openUI(data) {
         state.sliders = toPlainObject(data.sliders);
         state.numbers = toPlainObject(data.numbers);
 
+        // Sync currentGender from the loaded data. saveCharacter() force-writes
+        // identity_gender from currentGender, so if this stayed at the module
+        // default ('male') a female opening a store (which hides the gender tab)
+        // would be saved as male — flipping her model and wiping her face. Ground
+        // this in the loaded selection on EVERY open (store, /tc, /skin).
+        currentGender = (state.selections['identity_gender'] === 1) ? 'female' : 'male';
+
         // Receive gender-resolved tattoo list from Lua (only sent for tattoo stores)
         if (data.tattooList && typeof data.tattooList === 'object') {
             tattooList = data.tattooList;
@@ -2686,9 +2744,13 @@ window.addEventListener('message', (event) => {
             break;
         case 'mergeSelections':
             // After applying an outfit, merge the new clothing/prop selections so
-            // the cards highlight correctly without wiping other selections.
+            // the cards highlight correctly without wiping other selections. Also
+            // fold them into initialSelections so these items don't read as
+            // "changed" and trigger the checkout/payment flow — an applied outfit
+            // is already owned, it must not be re-charged.
             if (data.selections && typeof data.selections === 'object') {
                 Object.assign(state.selections, data.selections);
+                Object.assign(initialSelections, data.selections);
             }
             break;
         case 'updateAutoCounts':

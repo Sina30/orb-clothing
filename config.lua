@@ -671,6 +671,7 @@ Config.UIMapping = {
     clothing_tops = { type = "clothing", componentId = 11 },
     clothing_undershirts = { type = "clothing", componentId = 8 },
     clothing_vests = { type = "clothing", componentId = 9 },   -- body armor / chalecos (no gameOffset: drawable 0 = none)
+    clothing_decals = { type = "clothing", componentId = 10 },  -- badges/decals/emblems (no gameOffset: drawable 0 = none)
     clothing_arms = { type = "clothing", componentId = 3 },
     clothing_pants = { type = "clothing", componentId = 4 },
     clothing_backpacks = { type = "clothing", componentId = 5 },

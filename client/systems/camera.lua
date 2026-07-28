@@ -26,13 +26,18 @@ local ZOOM_STEP    = 3.0   -- degrees per wheel tick
 -- pointAtCoords.z so the camera slides up/down along the ped while the
 -- view stays level (pure crane-camera pan, not tilt). Reset on every
 -- SetPosition the same way zoom is.
-CameraSystem.baseCoords        = nil
-CameraSystem.basePointAt       = nil
-CameraSystem.verticalPanOffset = 0.0
+CameraSystem.baseCoords          = nil
+CameraSystem.basePointAt         = nil
+CameraSystem.verticalPanOffset   = 0.0
+CameraSystem.horizontalPanOffset = 0.0
 
 local PAN_MIN_OFFSET = -0.6  -- metres below the preset (toward feet)
 local PAN_MAX_OFFSET =  0.8  -- metres above the preset (toward head)
 local PAN_STEP       =  0.04 -- metres per drag tick (matches rotation DRAG_THRESHOLD feel)
+
+local HPAN_MIN_OFFSET = -1.0  -- metres to the left of the preset
+local HPAN_MAX_OFFSET =  1.0  -- metres to the right of the preset
+local HPAN_STEP       =  0.05 -- metres per drag tick
 
 -- ── Wall / prop collision avoidance ──────────────────────────────────────
 -- The camera sits a fixed distance in front of the ped. In a tight interior that
@@ -41,8 +46,10 @@ local PAN_STEP       =  0.04 -- metres per drag tick (matches rotation DRAG_THRE
 -- inside a wall, so we pull the lens in to just short of anything between the ped
 -- and the desired camera spot.
 
-local CAM_COLLISION_MARGIN = 0.25   -- metres to keep the lens off the surface
-local CAM_MIN_DISTANCE     = 0.5    -- never frame the subject closer than this
+local CAM_COLLISION_MARGIN = 0.3    -- metres to keep the lens off the surface
+local CAM_MIN_DISTANCE     = 0.5    -- preferred minimum framing distance
+local CAM_ABS_MIN_DISTANCE = 0.2    -- hard floor when a wall forces a tighter shot
+                                    -- (better a very close shot than clipping through)
 
 -- Pure: origin (at the ped), the desired camera point, and where the ray hit a
 -- surface → where the camera should actually sit. Pulled in short of the wall but
@@ -55,25 +62,80 @@ local function PullInFromHit(fromCoords, toCoords, hitCoords)
     local hitDist = #(hitCoords - fromCoords)
     local newDist = hitDist - CAM_COLLISION_MARGIN
     if newDist >= dist then return toCoords end     -- hit is beyond the camera: fine
-    if newDist < CAM_MIN_DISTANCE then newDist = CAM_MIN_DISTANCE end
+    -- Prefer the min framing distance, but NEVER go past the wall: a camera behind
+    -- the wall is judged outside the room and the whole interior culls ("disappears").
+    -- If the wall is closer than the min, accept the tighter shot instead of clipping.
+    if newDist > CAM_MIN_DISTANCE then
+        -- room to spare: nothing to do
+    elseif hitDist - CAM_COLLISION_MARGIN >= CAM_ABS_MIN_DISTANCE then
+        newDist = math.max(CAM_ABS_MIN_DISTANCE, hitDist - CAM_COLLISION_MARGIN)
+    else
+        newDist = CAM_ABS_MIN_DISTANCE
+    end
     return fromCoords + (nrm * newDist)
 end
 CameraSystem._PullInFromHit = PullInFromHit  -- exposed for tests
 
+-- Portal-culling guard. A camera that lands OUTSIDE the ped's MLO interior (behind
+-- a wall / past the room bounds) makes the engine cull the whole interior — it just
+-- vanishes. The geometry ray above can miss this (e.g. a lateral pan slides the lens
+-- sideways past a wall the ped→cam ray never crossed). So: if the ped is in an
+-- interior and the chosen camera point is NOT in that same interior, step back toward
+-- the ped until it is. Purely defensive — it only ever pulls the lens IN, and if it
+-- can't confirm an inside point (flaky native) it keeps the geometry-clamped spot.
+local function KeepInInterior(fromCoords, camCoords, pedInterior)
+    if GetInteriorAtCoords(camCoords.x, camCoords.y, camCoords.z) == pedInterior then
+        return camCoords
+    end
+    local dir  = camCoords - fromCoords
+    local dist = #dir
+    if dist < 0.001 then return camCoords end
+    local nrm = dir / dist
+    local d = dist - 0.1
+    while d > CAM_ABS_MIN_DISTANCE do
+        local p = fromCoords + (nrm * d)
+        if GetInteriorAtCoords(p.x, p.y, p.z) == pedInterior then
+            return p
+        end
+        d = d - 0.1
+    end
+    return camCoords   -- never found an inside point → don't over-tighten
+end
+
 -- Cast from the look-at point (on the ped) to the desired camera spot; if a wall
 -- or prop is in the way, return a pulled-in position. Ignores the subject ped.
+-- Then keep the lens inside the ped's interior so the room can't cull.
 local function ClampToCollision(fromCoords, toCoords)
-    local ignore = CameraSystem.subjectPed or PlayerPedId()
+    local subject = CameraSystem.subjectPed or PlayerPedId()
     -- flags: 1 = world/map, 16 = objects/props (NOT peds or vehicles).
     local handle = StartExpensiveSynchronousShapeTestLosProbe(
         fromCoords.x, fromCoords.y, fromCoords.z,
         toCoords.x,   toCoords.y,   toCoords.z,
-        1 + 16, ignore, 4)
+        1 + 16, subject, 4)
     local _, hit, hitCoords = GetShapeTestResult(handle)
+    local cam = toCoords
     if hit and hit ~= 0 then
-        return PullInFromHit(fromCoords, toCoords, vector3(hitCoords.x, hitCoords.y, hitCoords.z))
+        cam = PullInFromHit(fromCoords, toCoords, vector3(hitCoords.x, hitCoords.y, hitCoords.z))
     end
-    return toCoords
+
+    -- Only relevant inside an MLO — outdoors GetInteriorFromEntity is 0, nothing culls.
+    local pedInterior = GetInteriorFromEntity(subject)
+    if pedInterior and pedInterior ~= 0 then
+        cam = KeepInInterior(fromCoords, cam, pedInterior)
+    end
+    return cam
+end
+
+-- Anchor world/interior STREAMING + culling to the camera position. The engine
+-- renders and portal-culls a scripted cam from where the CAMERA is; when we instead
+-- pinned focus to the ped (SetFocusEntity), the interior stayed loaded but rendered
+-- CULLED from the camera's viewpoint until the camera moved — which is why nudging
+-- the pan "fixed" it. Focusing the camera keeps the room both loaded AND rendered,
+-- refreshed every time the camera is (re)positioned. The camera is kept inside the
+-- interior by ClampToCollision/KeepInInterior, so this never focuses into the void.
+-- Cleared by ClearFocus() in CloseCreator.
+local function FocusOnCamera(camCoords)
+    SetFocusPosAndVel(camCoords.x, camCoords.y, camCoords.z, 0.0, 0.0, 0.0)
 end
 
 function CameraSystem.Create(ped)
@@ -154,11 +216,15 @@ local function ApplyCameraPosition(position, anchorCoords, anchorHeading, smooth
     -- framed intentionally, user zoom is re-applied only within a preset.
     CameraSystem.currentFov = nil
 
-    -- Cache base coords for AdjustVerticalPan and reset the pan offset so
-    -- each preset starts at its intended framing.
-    CameraSystem.baseCoords        = camCoords
-    CameraSystem.basePointAt       = pointAtCoords
-    CameraSystem.verticalPanOffset = 0.0
+    -- Cache base coords for the pan helpers and reset BOTH pan offsets so each
+    -- preset starts at its intended framing.
+    CameraSystem.baseCoords          = camCoords
+    CameraSystem.basePointAt         = pointAtCoords
+    CameraSystem.verticalPanOffset   = 0.0
+    CameraSystem.horizontalPanOffset = 0.0
+
+    -- Keep interior streaming + culling anchored to the new camera spot.
+    FocusOnCamera(camCoords)
 
     -- Smooth interpolation: create a new cam and lerp from old to new
     if smooth and CameraSystem.activeCamera then
@@ -287,11 +353,50 @@ function CameraSystem.AdjustVerticalPan(delta)
     if newOffset > PAN_MAX_OFFSET then newOffset = PAN_MAX_OFFSET end
     CameraSystem.verticalPanOffset = newOffset
 
+    CameraSystem._ApplyPanOffsets()
+end
+
+-- Slide the camera sideways, perpendicular to the view direction. The camera
+-- shifts opposite the drag so the PED appears to move with it: delta > 0 → the ped
+-- slides RIGHT in frame (camera pans left), delta < 0 → left. Clamped to [HPAN_MIN, HPAN_MAX].
+function CameraSystem.AdjustHorizontalPan(delta)
+    if not CameraSystem.activeCamera or not CameraSystem.baseCoords then return end
+    local newOffset = CameraSystem.horizontalPanOffset + (delta * HPAN_STEP)
+    if newOffset < HPAN_MIN_OFFSET then newOffset = HPAN_MIN_OFFSET end
+    if newOffset > HPAN_MAX_OFFSET then newOffset = HPAN_MAX_OFFSET end
+    CameraSystem.horizontalPanOffset = newOffset
+
+    CameraSystem._ApplyPanOffsets()
+end
+
+-- Compose BOTH pan offsets onto the preset base and push to the camera. Both
+-- axes MUST route through here — each recomputes from baseCoords, so applying one
+-- inline would wipe the other. Horizontal shifts along the flattened right-vector
+-- (perpendicular to the view), so the view stays parallel (a lateral crane, not a yaw).
+function CameraSystem._ApplyPanOffsets()
+    if not CameraSystem.activeCamera or not CameraSystem.baseCoords then return end
+
     local bc = CameraSystem.baseCoords
     local bp = CameraSystem.basePointAt
-    local lookAt = vector3(bp.x, bp.y, bp.z + newOffset)
-    local target = ClampToCollision(lookAt, vector3(bc.x, bc.y, bc.z + newOffset))
+    local v  = CameraSystem.verticalPanOffset
+    local h  = CameraSystem.horizontalPanOffset
+
+    -- Flattened forward (XY) → right vector = rotate forward 90°.
+    local forward = vector3(bp.x - bc.x, bp.y - bc.y, 0.0)
+    local len = math.sqrt(forward.x * forward.x + forward.y * forward.y)
+    if len > 0.001 then
+        forward = vector3(forward.x / len, forward.y / len, 0.0)
+    else
+        forward = vector3(1.0, 0.0, 0.0)
+    end
+    local right = vector3(-forward.y, forward.x, 0.0)
+
+    local lookAt = vector3(bp.x + right.x * h, bp.y + right.y * h, bp.z + v)
+    local camPos = vector3(bc.x + right.x * h, bc.y + right.y * h, bc.z + v)
+    local target = ClampToCollision(lookAt, camPos)
     SetCamCoord(CameraSystem.activeCamera, target.x, target.y, target.z)
     PointCamAtCoord(CameraSystem.activeCamera, lookAt.x, lookAt.y, lookAt.z)
+    -- Follow the pan with the streaming focus so the interior stays rendered.
+    FocusOnCamera(target)
 end
 

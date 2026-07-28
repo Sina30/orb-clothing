@@ -231,6 +231,65 @@ RegisterCommand('skin', function(source, args)
     end
 end, false)  -- permission enforced inside via AdminStorage.IsAdmin
 
+-- /checkskin [id] — dump a player's saved appearance summary (admin/console).
+-- Debug aid for support: confirms what's actually persisted (gender, item counts)
+-- without opening the creator. Gated by OUR admin check, never a raw ACE probe.
+RegisterCommand('checkskin', function(source, args)
+    local src = source
+
+    if src ~= 0 and not AdminStorage.IsAdmin(src) then
+        notifyAdmin(src, 'skin_no_perm')
+        return
+    end
+
+    local target = args[1] and tonumber(args[1]) or src
+    if not target or target == 0 then
+        notifyAdmin(src, 'skin_need_id')
+        return
+    end
+    if not GetPlayerName(target) then
+        notifyAdmin(src, 'skin_offline', tostring(args[1] or target))
+        return
+    end
+
+    local identifier = Bridge.GetIdentifier(target)
+    if not identifier then
+        notifyAdmin(src, 'checkskin_no_id', tostring(target))
+        return
+    end
+
+    local raw = MySQL.scalar.await('SELECT appearance FROM character_appearance WHERE identifier = ?', { identifier })
+    if not raw then
+        notifyAdmin(src, 'checkskin_no_data', identifier)
+        return
+    end
+    local data = json.decode(raw)
+    if not data then
+        notifyAdmin(src, 'checkskin_bad_json', identifier)
+        return
+    end
+
+    local function cnt(t)
+        local c = 0
+        if t then for _ in pairs(t) do c = c + 1 end end
+        return c
+    end
+    local gender = data.selections and data.selections['identity_gender']
+    local genderStr = gender == 1 and 'female' or (gender == 0 and 'male' or 'unknown')
+    local summary = L('checkskin_summary',
+        GetPlayerName(target) or 'Unknown', identifier, genderStr,
+        cnt(data.selections), cnt(data.sliders), cnt(data.numbers),
+        cnt(data.clothing), cnt(data.props), data.tattoos and #data.tattoos or 0)
+
+    if src == 0 then
+        lib.print.info('[orb-clothing] ' .. summary)
+    else
+        TriggerClientEvent('orb-clothing:client:adminNotify', src, {
+            title = L('skin_title'), description = summary, type = 'inform',
+        })
+    end
+end, false)  -- permission enforced inside via AdminStorage.IsAdmin
+
 -- ── Initial rebuild on resource start ───────────────────────────────────
 
 RebuildServerStoreLocations()
