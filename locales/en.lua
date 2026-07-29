@@ -171,6 +171,7 @@ local L_en = {
     -- ── Scene hints (static UI) ──────────────────────────────────────
     ['hint_rotate'] = "DRAG TO ROTATE & PAN",
     ['hint_pan_h'] = "RIGHT-CLICK DRAG TO PAN LEFT/RIGHT",
+    ['visibility_title'] = "PREVIEW",
     ['hint_zoom'] = "SCROLL TO ZOOM",
 
     -- ── Admin panel (static UI) ──────────────────────────────────────
@@ -181,6 +182,7 @@ local L_en = {
     ['admin_type_barber'] = "BARBER",
     ['admin_type_tattoo'] = "TATTOO",
     ['admin_type_accessories'] = "ACCESSORIES",
+    ['admin_type_clothing_accessories'] = "CLOTHING + ACCESSORIES",
     ['admin_zone_position'] = "ZONE POSITION",
     ['admin_set_position'] = "SET TO MY POSITION",
     ['admin_teleport'] = "TELEPORT TO STORE",

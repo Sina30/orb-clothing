@@ -58,8 +58,14 @@ RegisterCommand('storeadmin', function()
     if adminPanelOpen then return end
     adminPanelOpen = true
 
-    -- Request store list from server then open NUI
+    -- Request store list from server then open NUI. The server returns `false`
+    -- (not an empty table) when the caller isn't an admin — deny opening entirely.
     local stores = lib.callback.await('orb-clothing:server:getAdminStores', false)
+    if stores == false then
+        adminPanelOpen = false
+        lib.notify({ title = L('admin_title'), description = L('skin_no_perm'), type = 'error' })
+        return
+    end
     if not stores then stores = {} end
 
     SetNuiFocus(true, true)
@@ -68,7 +74,7 @@ RegisterCommand('storeadmin', function()
         stores = stores,
         storeTypes = GetStoreTypeNames()
     })
-end, false) -- Permission checked server-side via IsAdmin()
+end, false) -- Permission enforced server-side in the getAdminStores callback
 
 -- Helper: build a simple list of store type info for the NUI
 function GetStoreTypeNames()

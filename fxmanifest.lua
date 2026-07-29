@@ -5,7 +5,7 @@ lua54 'yes'
 name 'orb-clothing'
 author 'TheOrb Scripts'
 description 'Advanced Character Creator & Clothing System'
-version '1.7.0'
+version '1.8.0'
 
 dependencies {
     'ox_lib',
@@ -25,9 +25,9 @@ shared_scripts {
     '@ox_lib/init.lua',
     'bridge/_detect.lua',
     'config.lua',
-    -- Localization: translation tables first, then the L() helper that reads them
-    'locales/en.lua',
-    'locales/es.lua',
+    -- Localization: translation tables first, then the L() helper that reads them.
+    -- Glob so any locale a server drops in (de.lua, fr.lua, …) loads automatically.
+    'locales/*.lua',
     'shared/locale.lua',
     'shared/tattoo_data.lua',
     'shared/ped_models.lua',
@@ -44,6 +44,7 @@ client_scripts {
 
     -- Core systems
     'client/systems/appearance.lua',
+    'client/systems/visibility.lua',
     'client/systems/hair.lua',
     'client/systems/clothes.lua',
     'client/systems/tattoos.lua',

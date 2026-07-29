@@ -117,6 +117,7 @@ const SUBCATEGORY_CAMERA = {
 };
 
 let currentGender = 'male';
+let textureMax = 15;   // max texture index of the currently-selected clothing/prop drawable (pushed from Lua)
 let isFirstTime = false;
 let allowedTabs = null; // null = all tabs visible; array = only these tab ids visible
 let allowedSubs = null; // null = all subcategories; array = only these subcategory ids
@@ -492,8 +493,9 @@ const CATEGORY_CONTENT = {
             { id: 'itemOpacity', label: 'Opacity' }
         ],
         controls: [
-            { id: 'texture', label: 'Texture', type: 'number', min: 0, max: 15 },
-            { id: 'palette', label: 'Palette', type: 'number', min: 0, max: 15 }
+            // max is a fallback only — the real per-drawable texture count is pushed
+            // from Lua (GetNumberOfPedTextureVariations) via 'setTextureCount'.
+            { id: 'texture', label: 'Texture', type: 'number', min: 0, max: 15 }
         ]
     },
     accessories: {
@@ -501,8 +503,9 @@ const CATEGORY_CONTENT = {
             { id: 'items', title: 'Items', type: 'items', count: 45 }
         ],
         controls: [
-            { id: 'texture', label: 'Texture', type: 'number', min: 0, max: 15 },
-            { id: 'palette', label: 'Palette', type: 'number', min: 0, max: 15 }
+            // max is a fallback only — the real per-drawable texture count is pushed
+            // from Lua (GetNumberOfPedTextureVariations) via 'setTextureCount'.
+            { id: 'texture', label: 'Texture', type: 'number', min: 0, max: 15 }
         ]
     },
     tattoos: {
@@ -1159,8 +1162,25 @@ function buildJumpControl(sectionId, content, total) {
     input.addEventListener('change', doJump);
     input.addEventListener('click', (e) => e.stopPropagation());
 
+    // Prev/next arrows: step the selection one item at a time. jumpToItem clamps
+    // to [1, total], so the ends are handled for us.
+    const stepBtn = (label, delta, cls) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'section-jump-arrow ' + cls;
+        b.textContent = label;
+        b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const base = parseInt(input.value, 10) || displayNumForIndex(content, state.selections[sectionId] || 0) || 1;
+            jumpToItem(sectionId, base + delta);
+        });
+        return b;
+    };
+
+    wrap.appendChild(stepBtn('‹', -1, 'prev'));
     wrap.appendChild(input);
     wrap.appendChild(totalEl);
+    wrap.appendChild(stepBtn('›', 1, 'next'));
     return wrap;
 }
 
@@ -1382,8 +1402,13 @@ function createNumberControls(controls) {
         }
 
         const value = state.numbers[control.id] !== undefined ? state.numbers[control.id] : control.min;
+        // Texture's max is per-drawable and pushed live from Lua, so read it fresh
+        // on every click (not the static control.max) via getMax().
+        const isTexture = control.id === 'texture';
+        const getMax = isTexture ? (() => textureMax) : (() => control.max);
         const controlEl = document.createElement('div');
         controlEl.className = 'number-control';
+        if (isTexture) controlEl.dataset.dynamicMax = 'texture';
         controlEl.innerHTML = `
             <span class="control-label">${t('ui_' + control.id, control.label)}</span>
             <div class="control-row">
@@ -1392,7 +1417,7 @@ function createNumberControls(controls) {
                 </button>
                 <div class="control-value">
                     <span class="current">${value}</span>
-                    <span class="max">/${control.max}</span>
+                    <span class="max">/${getMax()}</span>
                 </div>
                 <button class="control-btn next" data-control="${control.id}" data-action="next">
                     <span class="control-icon">${nextIcon}</span>
@@ -1403,8 +1428,8 @@ function createNumberControls(controls) {
         const prevBtn = controlEl.querySelector('.prev');
         const nextBtn = controlEl.querySelector('.next');
 
-        prevBtn.addEventListener('click', () => updateNumber(control.id, -1, control.min, control.max, controlEl));
-        nextBtn.addEventListener('click', () => updateNumber(control.id, 1, control.min, control.max, controlEl));
+        prevBtn.addEventListener('click', () => updateNumber(control.id, -1, control.min, getMax(), controlEl));
+        nextBtn.addEventListener('click', () => updateNumber(control.id, 1, control.min, getMax(), controlEl));
 
         container.appendChild(controlEl);
     });
@@ -2023,6 +2048,10 @@ function bindEvents() {
             sendToGame('toggleLight', { enabled: btnLight.classList.contains('active') });
         });
     }
+    const btnVisibility = document.getElementById('btnVisibility');
+    if (btnVisibility) {
+        btnVisibility.addEventListener('click', toggleVisibilityPanel);
+    }
 
     document.addEventListener('keydown', handleKeydown);
     optionsPanel.addEventListener('scroll', handleScroll);
@@ -2601,8 +2630,8 @@ function openUI(data) {
     container.classList.remove('hidden');
 
     // Filter-edit mode: swap the normal Save for the item-picker toolbar.
-    if (filterEditMode) { saveBtn.style.display = 'none'; setupFilterPicker(); }
-    else { saveBtn.style.display = ''; teardownFilterPicker(); }
+    if (filterEditMode) { saveBtn.style.display = 'none'; setupFilterPicker(); teardownVisibilityBar(); }
+    else { saveBtn.style.display = ''; teardownFilterPicker(); setupVisibilityBar(); }
 
     // Pre-fetch all CDN images in background so browsing feels instant
     preloadCDNImages();
@@ -2615,6 +2644,7 @@ function closeUI() {
     const genericConfirm = document.querySelector('.generic-confirm-panel');
     if (genericConfirm) genericConfirm.remove();
     teardownFilterPicker();
+    teardownVisibilityBar();
     sendToGame('closeUI', {});
 }
 
@@ -2694,6 +2724,100 @@ function teardownFilterPicker() {
     if (filterToolbarEl) { filterToolbarEl.remove(); filterToolbarEl = null; }
 }
 
+// ── Visibility toggles (preview) ─────────────────────────────────────────────
+// A bar of buttons to hide/show WORN components, so you can peek at what's under
+// a garment (e.g. do the arms clip through this top?). Purely visual — Lua un-hides
+// everything before saving, and picking an item un-hides its slot.
+const VISIBILITY_TOGGLES = [
+    { kind: 'prop',      id: 0,  label: 'sub_hats' },
+    { kind: 'prop',      id: 1,  label: 'sub_glasses' },
+    { kind: 'component', id: 1,  label: 'sub_masks' },
+    { kind: 'component', id: 11, label: 'sub_tops' },
+    { kind: 'component', id: 8,  label: 'sub_undershirts' },
+    { kind: 'component', id: 3,  label: 'sub_arms' },
+    { kind: 'component', id: 9,  label: 'sub_vests' },
+    { kind: 'component', id: 4,  label: 'sub_pants' },
+];
+let visibilityBarEl = null;
+const hiddenSlots = new Set();
+
+const EYE_ON_SVG = '<svg viewBox="0 0 24 24" fill="none"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/></svg>';
+const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none"><path d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 4.2A11 11 0 0 1 12 4c6.4 0 10 7 10 7a18 18 0 0 1-3.3 4.1M6.6 6.6A18 18 0 0 0 2 11s3.6 7 10 7a11 11 0 0 0 3.4-.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function slotKey(kind, id) { return kind + ':' + id; }
+
+function setSlotHidden(key, hidden) {
+    if (hidden) hiddenSlots.add(key); else hiddenSlots.delete(key);
+    if (visibilityBarEl) {
+        const row = visibilityBarEl.querySelector(`[data-key="${key}"]`);
+        if (row) row.classList.toggle('hidden-on', !!hidden);
+    }
+}
+
+function toggleVisibility(kind, id) {
+    // Lua is the source of truth (its snapshot decides show/hide) — apply the state
+    // it returns so the button can't drift out of sync with the ped.
+    sendToGameAsync('toggleVisibility', { kind, id })
+        .then(res => setSlotHidden(slotKey(kind, id), res && res.hidden))
+        .catch(() => {});
+}
+
+function setupVisibilityBar() {
+    teardownVisibilityBar();
+    // Only in shops that sell clothing/accessories, and never in the item-filter picker.
+    const tabs = allowedTabs || [];
+    if (filterEditMode || !(tabs.includes('clothing') || tabs.includes('accessories'))) return;
+
+    // Vertical "layers" panel anchored top-right, next to the scene toolbar — narrow
+    // so it never overlaps the left clothing menu, and it reads like a layers list.
+    const panel = document.createElement('div');
+    panel.className = 'visibility-panel';
+    panel.innerHTML =
+        `<div class="visibility-panel-header">` +
+        `<span class="visibility-title-icon">${EYE_ON_SVG}</span>` +
+        `<span>${t('visibility_title', 'PREVIEW')}</span></div>`;
+
+    VISIBILITY_TOGGLES.forEach(tg => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'visibility-row';
+        row.dataset.key = slotKey(tg.kind, tg.id);
+        row.innerHTML =
+            `<span class="visibility-eye eye-on">${EYE_ON_SVG}</span>` +
+            `<span class="visibility-eye eye-off">${EYE_OFF_SVG}</span>` +
+            `<span class="visibility-label">${t(tg.label, tg.label)}</span>`;
+        row.addEventListener('click', () => toggleVisibility(tg.kind, tg.id));
+        panel.appendChild(row);
+    });
+    // Starts hidden — the toolbar eye button reveals it (keeps the scene clean by
+    // default, consistent with the blur/light buttons starting off).
+    panel.classList.add('hidden');
+    // Anchor inside #container (same as the scene toolbar) so it lines up right
+    // below it as an extension, not floating loose against the viewport.
+    (document.getElementById('container') || document.body).appendChild(panel);
+    visibilityBarEl = panel;
+
+    // Reveal the toolbar toggle button (only shown where the panel is relevant).
+    const btn = document.getElementById('btnVisibility');
+    if (btn) { btn.classList.remove('hidden'); btn.classList.remove('active'); }
+}
+
+// Toolbar eye button → show/hide the visibility panel.
+function toggleVisibilityPanel() {
+    if (!visibilityBarEl) return;
+    visibilityBarEl.classList.toggle('hidden');
+    const shown = !visibilityBarEl.classList.contains('hidden');
+    const btn = document.getElementById('btnVisibility');
+    if (btn) btn.classList.toggle('active', shown);
+}
+
+function teardownVisibilityBar() {
+    if (visibilityBarEl) { visibilityBarEl.remove(); visibilityBarEl = null; }
+    hiddenSlots.clear();
+    const btn = document.getElementById('btnVisibility');
+    if (btn) { btn.classList.add('hidden'); btn.classList.remove('active'); }
+}
+
 window.addEventListener('message', (event) => {
     const data = event.data;
     switch (data.action) {
@@ -2718,8 +2842,13 @@ window.addEventListener('message', (event) => {
             // this path, so the picker toolbar must be torn down here too — otherwise
             // it lingers on screen after the UI is hidden.
             teardownFilterPicker();
+            teardownVisibilityBar();
             filterEditMode = false;
             filterEditSelection = null;
+            break;
+        case 'visibilityShown':
+            // Lua un-hid a slot because the player picked an item for it — reflect it.
+            setSlotHidden(slotKey(data.kind, data.id), false);
             break;
         case 'closeUI':
             closeUI();
@@ -2762,6 +2891,27 @@ window.addEventListener('message', (event) => {
                 renderOptionsPanel();
             }
             break;
+        case 'setTextureCount': {
+            // Real per-drawable texture count from Lua (GetNumberOfPedTextureVariations).
+            // Fixes the old hardcoded 15/15 — the Texture control now shows the true range.
+            const n = parseInt(data.count, 10);
+            textureMax = (isNaN(n) || n < 1) ? 0 : (n - 1);
+            const texEl = document.querySelector('.number-control[data-dynamic-max="texture"]');
+            if (texEl) {
+                const maxSpan = texEl.querySelector('.max');
+                if (maxSpan) maxSpan.textContent = '/' + textureMax;
+                // Clamp the current value if the new drawable has fewer textures.
+                const curSpan = texEl.querySelector('.current');
+                let cur = curSpan ? (parseInt(curSpan.textContent, 10) || 0) : 0;
+                if (cur > textureMax) {
+                    cur = textureMax;
+                    if (curSpan) curSpan.textContent = String(cur);
+                    state.numbers.texture = cur;
+                    sendToGame('updateNumber', { control: 'texture', value: cur });
+                }
+            }
+            break;
+        }
         // ── Admin panel messages ──
         case 'openAdminPanel':
             adminOpenPanel(data.stores, data.storeTypes);

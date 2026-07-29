@@ -575,6 +575,7 @@ local function OpenCreator(appearanceData, storeContext)
 
     activeStoreContext = storeContext  -- may be nil for /tc
     wasSaved = false
+    if ClothingVisibility then ClothingVisibility.Reset() end   -- fresh preview-toggle state
 
     local isBarberChair = storeContext and storeContext.chair
 
@@ -808,6 +809,15 @@ local function OpenCreator(appearanceData, storeContext)
     SetNuiFocus(true, true)
     SendNUIMessage(msg)
     Wait(0)   -- hand the NUI a frame to paint before the reveal
+
+    -- Kick the interior occlusion awake as the world reveals. A scripted camera
+    -- created near a wall (teleported store spot, private bucket, behind the fade)
+    -- can leave the room culled until it moves — this reproduces that motion under
+    -- the fade so the interior is already visible when the black lifts.
+    if not isBarberChair then
+        CameraSystem.NudgeToRefresh()
+    end
+
     TransitionFadeIn()
 
     DebugPrint('Creator opened' .. (storeContext and (' [' .. storeContext.storeType .. ']') or ' [/tc]'))

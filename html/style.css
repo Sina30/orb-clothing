@@ -554,6 +554,31 @@ html, body {
     letter-spacing: 0.03vh;
 }
 
+.section-jump-arrow {
+    width: 2vh;
+    height: 2vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.4vh;
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: 1.2vh;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.section-jump-arrow:hover {
+    background: rgba(var(--primary-rgb), 0.15);
+    border-color: rgba(var(--primary-rgb), 0.5);
+    color: var(--text-primary);
+}
+
 /* ── Store item picker (filter-edit mode) ─────────────────────────── */
 .filter-toolbar {
     position: fixed;
@@ -1560,6 +1585,85 @@ html, body {
     pointer-events: none;
     white-space: nowrap;
 }
+
+/* ── Visibility toggles (preview) ──────────────────────────────────────
+   A compact vertical "layers" panel top-right (next to the scene toolbar), so it
+   never overlaps the left clothing menu. Each row is an eye toggle for one worn
+   garment. Solid surface — NO backdrop-filter (unsupported in FiveM CEF). */
+
+.visibility-panel {
+    position: absolute;
+    top: 7.4vh;
+    right: 32vh;   /* aligned under the scene toolbar (its right is also 32vh) */
+    width: 12.5vh;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15vh;
+    padding: 0.6vh 0.5vh;
+    background: rgba(19, 19, 19, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.8vh;
+    box-shadow: 0 1.2vh 3vh rgba(0, 0, 0, 0.45);
+    z-index: 5;
+    pointer-events: auto;
+    animation: visPanelIn 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes visPanelIn {
+    from { opacity: 0; transform: translateY(-0.6vh); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.visibility-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5vh;
+    padding: 0.25vh 0.5vh 0.6vh;
+    margin-bottom: 0.25vh;
+    font-family: var(--font-headline, var(--font-body));
+    font-size: 0.68vh;
+    font-weight: 700;
+    letter-spacing: 0.16vh;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.visibility-title-icon { width: 1.2vh; height: 1.2vh; color: rgba(var(--primary-rgb), 0.85); display: flex; }
+.visibility-title-icon svg { width: 100%; height: 100%; }
+
+.visibility-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6vh;
+    width: 100%;
+    padding: 0.5vh 0.55vh;
+    background: transparent;
+    border: none;
+    border-radius: 0.5vh;
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: 0.85vh;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+}
+.visibility-row:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-primary); }
+
+.visibility-eye { width: 1.35vh; height: 1.35vh; display: flex; flex-shrink: 0; color: var(--text-muted); }
+.visibility-eye svg { width: 100%; height: 100%; }
+.visibility-row .eye-off { display: none; }
+.visibility-row:hover .eye-on { color: var(--text-secondary); }
+
+/* Hidden = this garment is currently peeked away on the ped: primary eye-off,
+   struck-through label, subtle primary wash on the row. */
+.visibility-row.hidden-on {
+    background: rgba(var(--primary-rgb), 0.1);
+    color: var(--text-muted);
+}
+.visibility-row.hidden-on .eye-on { display: none; }
+.visibility-row.hidden-on .eye-off { display: flex; color: var(--primary); }
+.visibility-row.hidden-on .visibility-label { text-decoration: line-through; opacity: 0.75; }
 
 /* ── Drag Zone ─────────────────────────────────────────────────────── */
 

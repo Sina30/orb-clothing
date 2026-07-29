@@ -10,7 +10,7 @@ Config = {}
 
 Config.Debug = false
 
--- UI / notification language. Must match a file in locales/ (en, es).
+-- UI / notification language. Must match a file in locales/ (en, es, de).
 -- Falls back to English for any missing key.
 Config.Language = 'en'
 
@@ -376,12 +376,30 @@ Config.StoreTypes = {
         blip = { sprite = 75, color = 1, scale = 0.8, name = "Tattoo Parlor" },
         defaultSize = vector2(7.0, 4.5),
         openCamera = "full"
+    },
+
+    -- Combined shop: clothing + accessories in one store. `tabs` already supports
+    -- multiple categories (the barber uses 3), so a store just needs both listed.
+    -- Add your own combos here the same way, e.g. { "clothing", "accessories", "hair" }.
+    clothing_accessories = {
+        tabs = { "clothing", "accessories" },
+        blip = { sprite = 73, color = 33, scale = 0.8, name = "Clothing & Accessories" },
+        defaultSize = vector2(14.0, 10.0),
+        openCamera = "full"
     }
 }
 
--- Add the Outfits tab to clothing stores when the feature is enabled.
+-- Add the Outfits tab to any store type that sells clothing (single or combined).
 if Config.Outfits and Config.Outfits.enabled then
-    Config.StoreTypes.clothing.tabs[#Config.StoreTypes.clothing.tabs + 1] = "outfits"
+    for _, st in pairs(Config.StoreTypes) do
+        local hasClothing = false
+        for _, tab in ipairs(st.tabs) do
+            if tab == "clothing" then hasClothing = true break end
+        end
+        if hasClothing then
+            st.tabs[#st.tabs + 1] = "outfits"
+        end
+    end
 end
 
 -- ═════════════════════════════════════════════════════════════════════

@@ -122,12 +122,22 @@ function NUICallbacks.Register()
         local enabled = data.enabled == true
         CameraSystem.dofActive = enabled
         local cam = CameraSystem.activeCamera
-        if cam then
+        if cam and DoesCamExist(cam) then
             if enabled then
                 SetCamUseShallowDofMode(cam, true)
-                SetCamNearDof(cam, 0.3)
+                SetCamNearDof(cam, 0.4)
                 SetCamFarDof(cam, 3.5)
-                SetCamDofStrength(cam, 1.0)
+                SetCamDofStrength(cam, 1.5)
+                -- The DOF only actually RENDERS while SetUseHiDof() runs EVERY frame.
+                -- Without it the strength above is invisible — that's why the Blur
+                -- button "did nothing". This loop ends when blur is turned off or the
+                -- camera is destroyed (it re-reads activeCamera so preset swaps keep it).
+                CreateThread(function()
+                    while CameraSystem.dofActive and CameraSystem.activeCamera and DoesCamExist(CameraSystem.activeCamera) do
+                        SetUseHiDof()
+                        Wait(0)
+                    end
+                end)
             else
                 SetCamUseShallowDofMode(cam, false)
                 SetCamDofStrength(cam, 0.0)
@@ -241,6 +251,16 @@ function NUICallbacks.Register()
             CameraSystem.AdjustHorizontalPan(delta)
         end
         cb('ok')
+    end)
+
+    -- Preview toggle: hide/show a worn component or prop. Returns the new hidden
+    -- state so the NUI button can reflect it. Visual only — nothing is saved hidden.
+    RegisterNUICallback('toggleVisibility', function(data, cb)
+        local hidden = false
+        if ClothingVisibility then
+            hidden = ClothingVisibility.Toggle(PlayerPedId(), data.kind, tonumber(data.id))
+        end
+        cb({ hidden = hidden })
     end)
 
     RegisterNUICallback('requestAppearanceData', function(data, cb)
@@ -357,10 +377,25 @@ function NUICallbacks.Register()
         elseif mapping.type == "clothing" then
             ClothingSystem.UpdateClothing(ped, mapping.componentId, index, 0)
             DataCache.SetActiveClothing(mapping.componentId, index)
+            -- Push the REAL texture count of this drawable so the NUI's Texture
+            -- control shows the true range instead of a hardcoded 15.
+            if index >= 0 then
+                SendNUIMessage({ action = 'setTextureCount', count = GetNumberOfPedTextureVariations(ped, mapping.componentId, index) })
+            end
+            -- Choosing an item shows the slot: drop any hidden state + un-toggle the button.
+            if ClothingVisibility and ClothingVisibility.ClearSlot('component', mapping.componentId) then
+                SendNUIMessage({ action = 'visibilityShown', kind = 'component', id = mapping.componentId })
+            end
 
         elseif mapping.type == "prop" then
             ClothingSystem.UpdateProp(ped, mapping.propId, index, 0)
             DataCache.SetActiveProp(mapping.propId, index)
+            if index >= 0 then
+                SendNUIMessage({ action = 'setTextureCount', count = GetNumberOfPedPropTextureVariations(ped, mapping.propId, index) })
+            end
+            if ClothingVisibility and ClothingVisibility.ClearSlot('prop', mapping.propId) then
+                SendNUIMessage({ action = 'visibilityShown', kind = 'prop', id = mapping.propId })
+            end
         end
 
         cb({success = true})
@@ -478,6 +513,9 @@ function NUICallbacks.Register()
             print('[NUICallbacks] saveCharacter')
         end
         local ctx = GetActiveStoreContext()
+        -- Un-hide any preview-hidden slots FIRST, so the snapshot captures the
+        -- player's REAL look and never persists an "invisible" preview value.
+        if ClothingVisibility then ClothingVisibility.RestoreAll(PlayerPedId()) end
         -- Snapshot the ped's clothing/props (with real textures) so per-item
         -- textures survive a relog — selections only carry the drawable.
         local look = OutfitSystem.BuildSnapshot(PlayerPedId())

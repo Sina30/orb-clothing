@@ -28,6 +28,13 @@ end
 -- ── Callback: get admin stores list ─────────────────────────────────────
 
 lib.callback.register('orb-clothing:server:getAdminStores', function(source)
+    -- Authoritative gate: non-admins can't even OPEN the panel (nor read the store
+    -- list). Returns false on denial so the client can distinguish "not allowed"
+    -- from "admin with zero stores" (an empty table).
+    if not AdminStorage.IsAdmin(source) then
+        lib.print.warn(('[AdminCommands] Non-admin %s tried to open /storeadmin'):format(tostring(source)))
+        return false
+    end
     return AdminStorage.GetAll()
 end)
 

@@ -171,6 +171,7 @@ local L_es = {
     -- ── Scene hints (static UI) ──────────────────────────────────────
     ['hint_rotate'] = "ARRASTRA PARA ROTAR Y MOVER",
     ['hint_pan_h'] = "CLICK DERECHO PARA MOVER IZQ/DER",
+    ['visibility_title'] = "VISTA PREVIA",
     ['hint_zoom'] = "RUEDA PARA HACER ZOOM",
 
     -- ── Admin panel (static UI) ──────────────────────────────────────
@@ -181,6 +182,7 @@ local L_es = {
     ['admin_type_barber'] = "BARBERÍA",
     ['admin_type_tattoo'] = "TATUAJES",
     ['admin_type_accessories'] = "ACCESORIOS",
+    ['admin_type_clothing_accessories'] = "ROPA + ACCESORIOS",
     ['admin_zone_position'] = "POSICIÓN DE ZONA",
     ['admin_set_position'] = "FIJAR A MI POSICIÓN",
     ['admin_teleport'] = "TELETRANSPORTARSE A LA TIENDA",

@@ -138,6 +138,38 @@ local function FocusOnCamera(camCoords)
     SetFocusPosAndVel(camCoords.x, camCoords.y, camCoords.z, 0.0, 0.0, 0.0)
 end
 
+-- Force the engine to recompute interior/portal occlusion for the scripted camera.
+-- WHY: fivem-appearance / illenium customize the ped IN PLACE (open, already-streamed
+-- spot) so their static camera renders the room fine. We teleport the ped to a
+-- configured store spot — often near a wall/prop — inside a private routing bucket,
+-- behind the entry fade. A scripted camera created in that state can leave the room
+-- CULLED (interior "breaks"/goes black) until it MOVES, which is exactly why the user
+-- found that panning fixes it. We reproduce that motion: a brief slide toward the
+-- subject (into the room, so it can't clip the wall behind) and back, over a few
+-- frames while the entry fade still hides it. The movement makes the engine re-evaluate
+-- occlusion and the interior pops in.
+function CameraSystem.NudgeToRefresh()
+    local cam = CameraSystem.activeCamera
+    if not cam or not DoesCamExist(cam) or not CameraSystem.baseCoords or not CameraSystem.basePointAt then return end
+    local bc = CameraSystem.baseCoords
+    local bp = CameraSystem.basePointAt
+    local dir = vector3(bp.x - bc.x, bp.y - bc.y, bp.z - bc.z)
+    local len = #dir
+    if len < 0.001 then return end
+    dir = dir / len
+    CreateThread(function()
+        for i = 6, 1, -1 do
+            local k = 0.04 * i   -- 24cm → 4cm toward the subject, easing back in
+            SetCamCoord(cam, bc.x + dir.x * k, bc.y + dir.y * k, bc.z + dir.z * k)
+            FocusOnCamera(vector3(bc.x + dir.x * k, bc.y + dir.y * k, bc.z + dir.z * k))
+            Wait(0)
+        end
+        SetCamCoord(cam, bc.x, bc.y, bc.z)
+        PointCamAtCoord(cam, bp.x, bp.y, bp.z)
+        FocusOnCamera(bc)
+    end)
+end
+
 function CameraSystem.Create(ped)
     if not DoesEntityExist(ped) then
         return false
@@ -197,10 +229,11 @@ end
 -- Apply DOF settings to a camera if blur is active
 local function ApplyDof(cam)
     if CameraSystem.dofActive then
+        -- Keep in sync with the toggleBlur callback (which drives SetUseHiDof per frame).
         SetCamUseShallowDofMode(cam, true)
-        SetCamNearDof(cam, 0.3)
+        SetCamNearDof(cam, 0.4)
         SetCamFarDof(cam, 3.5)
-        SetCamDofStrength(cam, 1.0)
+        SetCamDofStrength(cam, 1.5)
     end
 end
 

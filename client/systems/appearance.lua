@@ -90,6 +90,16 @@ function AppearanceSystem.UpdateScale(ped, scale, fromTick)
     if not DoesEntityExist(ped) then return false end
     if IsPedInAnyVehicle(ped, false) then return false end
 
+    -- Never fight the physics engine. While the ped ragdolls / falls / is dead, the
+    -- physics owns its transform; forcing SetEntityMatrix every frame here detaches
+    -- attached props — the hat pops off and becomes a colliding object the ragdolling
+    -- ped then bumps into — and corrupts the ragdoll. The scale re-applies by itself
+    -- once the ped is back on its feet (the loop keeps running). Do NOT write
+    -- _pedScale here either, so the loop resumes at the real scale afterward.
+    if IsPedRagdoll(ped) or IsPedFalling(ped) or IsPedDeadOrDying(ped, true) then
+        return false
+    end
+
     scale = math.max(0.85, math.min(1.15, scale))
     AppearanceSystem._pedScale = scale
 
